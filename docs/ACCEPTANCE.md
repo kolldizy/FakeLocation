@@ -3,12 +3,12 @@
 Date: **2026-10-18**. Machine: Windows 11 Pro build 26300 (x64). Device under test:
 **iPhone 16 Pro** (`iPhone17,1`), **iOS 27.0.1**, build **24A446**, connected over
 USB, paired, Developer Mode enabled. The device UDID and machine user name are
-masked in this published copy, and the generated reports below stay on the machine
-that produced them.
+masked in this published copy; the generated reports below are not published (they
+contain device identifiers).
 
 The run drives the **shipped** device bridge (`python -m location_studio_bridge serve`)
 over the same newline-delimited JSON protocol Electron uses — not a lab script that
-bypasses it. Artifacts produced by the run (kept locally, reproducible with the
+bypasses it. Artifacts produced by the run (not published; reproducible with the
 commands in [TESTING.md](TESTING.md)):
 
 | Artifact | What it is |
@@ -65,7 +65,7 @@ These assert that nothing claims success it did not observe:
 | --- | --- | --- |
 | Python unit tests | `npm run test:python` | 107 passed |
 | JavaScript unit tests | `npm run test:js` | 56 passed |
-| End-to-end renderer/IPC/bridge smoke test | `npm run smoke` | 25/25 checks passed with the phone attached, 24/24 without it (report kept locally) |
+| End-to-end renderer/IPC/bridge smoke test | `npm run smoke` | 25/25 checks passed with the phone attached, 24/24 without it (report not published) |
 | Bridge offline self-check | `npm run bridge:selfcheck` | 8/8 checks passed |
 | Syntax + ES module graph check | `npm run check` | 11 renderer modules parsed and linked |
 
@@ -77,12 +77,14 @@ up an attached iPhone by itself, without any click.
 ## Packaged Windows build
 
 Built with `npm run dist` on the same machine; binaries are **unsigned** ("no
-signing info identified, signing is skipped").
+signing info identified, signing is skipped"). The packaged app bundles only the
+documentation pages; the build's `extraResources` filter excludes `docs/reports`
+and `docs/media`, so no evidence reports or screenshots ship inside the app.
 
 | Artifact | Size | SHA-256 |
 | --- | --- | --- |
-| `LocationStudio-1.0.0-win-x64.exe` (portable) | 89.87 MB | `426C7D376413818D9E6269C44BAA4D614472A091D1265C285FBF877F0FA18C90` |
-| `LocationStudio-Setup-1.0.0.exe` (NSIS installer) | 90.12 MB | `F30E5E09309102BB94FF8FDBF32EE8D95DA224689FE1250F48CC5742320592C8` |
+| `LocationStudio-1.0.0-win-x64.exe` (portable) | 82.24 MB | `0ACE3476095A4A1D51DBC9F0DFEC6EC00A29193F41703695D897CEA4883B7098` |
+| `LocationStudio-Setup-1.0.0.exe` (NSIS installer) | 82.49 MB | `824C11BE684A7F75A4E2922ECFEEF19ED6FC295949D32B18A60E6CE6F4616CF0` |
 
 Verified with a packaged executable launched for real (not a development run):
 
@@ -91,7 +93,7 @@ Verified with a packaged executable launched for real (not a development run):
 | Unpacked build starts, bridge reaches `ready`, renderer loads `app://bundle/index.html` | verified over CDP |
 | Portable build self-extracts, starts app + bridge, shuts down with no leftover processes | verified over CDP |
 | iPhone flow through the packaged app: device listed, readiness `READY`, all five setup stages green (USB, PAIRED, DEV MODE, DEV SERVICE, SIM READY) | verified on a packaged run with the phone attached |
-| Basemap renders from the shipped build | verified (screenshot kept locally) |
+| Basemap renders from the shipped build | verified (screenshot not published) |
 
 The NSIS installer was **built but not executed** — installing would modify this
 machine. The acceptance route above used the development tree; see the next table.

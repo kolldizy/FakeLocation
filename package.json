@@ -49,7 +49,14 @@
     "extraResources": [
       {
         "from": "docs",
-        "to": "docs"
+        "to": "docs",
+        "filter": [
+          "**/*",
+          "!reports",
+          "!reports/**/*",
+          "!media",
+          "!media/**/*"
+        ]
       }
     ],
     "win": {

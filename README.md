@@ -105,8 +105,9 @@ Docs: [COMPATIBILITY.md](docs/COMPATIBILITY.md) (capability matrix) ·
 [TESTING.md](docs/TESTING.md) (how to run and reproduce everything) ·
 [LIMITATIONS.md](docs/LIMITATIONS.md) (scope and known limits).
 
-Generated reports and screenshots live in `docs/reports/` on the machine that
-produced them; they contain device identifiers, so they are not published here.
+Generated reports and screenshots go to `docs/reports/` when you run the tools.
+They contain device identifiers, so they are never published and never bundled into
+the packaged app — treat them as local scratch and delete them when done.
 
 ## Building
 

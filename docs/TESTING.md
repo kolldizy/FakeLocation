@@ -100,9 +100,10 @@ attached.
   build with a remote-debugging port, waits for the settled UI, screenshots it over
   CDP, then closes the window gracefully and stops the app.
 * The reports in `docs/reports/` are generated artefacts. They contain device
-  identifiers (UDID) and machine paths, so in this repository they are **not
-  published**: they stay on the machine that produced them. Regenerate them locally
-  with the commands above.
+  identifiers (UDID) and machine paths, so they are **not published**: keep them on
+  the machine that produced them and delete them when you are done. The packaged app
+  ships no reports — the `docs` extraResources filter excludes the folder.
+  Regenerate them locally with the commands above.
 
 ## What the suites do *not* cover
 
