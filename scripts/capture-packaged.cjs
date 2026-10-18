@@ -217,12 +217,24 @@ async function main() {
     }
 
     if (options.view === "device") {
-      // Opening the view triggers the deep scan, then the readiness check.
+      // Opening the view triggers the deep scan. The readiness check itself is an
+      // explicit action in the UI (the "Run readiness check" button), so drive it
+      // here — only when it has not produced a verdict yet — to capture the app's
+      // settled state rather than its idle one.
       await waitFor(
         Runtime,
         `document.querySelectorAll("#device-list .device-card").length > 0`,
         deadline,
         "a device card (is an iPhone attached and trusted?)",
+      );
+      await evaluate(
+        Runtime,
+        `(() => {
+          const tag = document.querySelector("#readiness-tag");
+          const button = document.querySelector("#btn-readiness");
+          if (button && tag && tag.textContent.trim() === "NOT RUN") button.click();
+          return true;
+        })()`,
       );
       // Wait until the card carries the identity (model, iOS version) and the
       // readiness check has produced a verdict, so the screenshot shows the app in
