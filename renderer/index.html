@@ -1,0 +1,544 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.tile.openstreetmap.org https://services.arcgisonline.com; connect-src 'self' https://nominatim.openstreetmap.org; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; worker-src 'none';"
+  />
+  <title>Location Studio — Cyber Motion</title>
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <!-- ============================================================ RAIL -->
+    <aside class="rail">
+      <div class="brand">
+        <div class="brand-mark">⌖</div>
+        <div>
+          <div class="brand-name">LOCATION<span>STUDIO</span></div>
+          <div class="brand-sub">CYBER MOTION / 1.0</div>
+        </div>
+      </div>
+
+      <div class="rail-label">WORKSPACE</div>
+      <button class="nav-item active" data-view="map" type="button">
+        <span class="glyph">◈</span> Map Studio <span class="index">01</span>
+      </button>
+      <button class="nav-item" data-view="device" type="button">
+        <span class="glyph">▣</span> Device Center <span class="index">02</span>
+      </button>
+      <button class="nav-item" data-view="motion" type="button">
+        <span class="glyph">◐</span> Motion Lab <span class="index">03</span>
+      </button>
+      <button class="nav-item" data-view="console" type="button">
+        <span class="glyph">⌁</span> Simulation Console
+        <span class="badge" id="nav-console-badge" hidden>!</span>
+      </button>
+
+      <div class="rail-spacer"></div>
+
+      <div class="rail-card">
+        <h4>DEVICE LINK</h4>
+        <span class="chip" id="rail-device-chip"><span class="dot"></span> CHECKING…</span>
+        <p id="rail-device-note">No device has been verified yet.</p>
+      </div>
+      <div class="rail-card">
+        <h4>BRIDGE</h4>
+        <span class="chip" id="rail-bridge-chip"><span class="dot"></span> STARTING</span>
+        <p id="rail-bridge-note">Locating the Python device bridge…</p>
+      </div>
+      <div class="rail-version">BUILD 1.0.0 · WINDOWS</div>
+    </aside>
+
+    <!-- ============================================================ MAIN -->
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow" id="view-eyebrow">MAP STUDIO / COORDINATE DESIGN</div>
+          <h1 id="view-title">Map Studio</h1>
+        </div>
+        <div class="topbar-actions">
+          <span class="chip" id="chip-simulation"><span class="dot"></span> NO SIMULATION</span>
+          <span class="chip" id="chip-override"><span class="dot"></span> DEVICE GPS: NORMAL</span>
+          <button class="btn tiny ghost" id="btn-restart-bridge" type="button">Restart bridge</button>
+          <button class="btn tiny danger" id="btn-emergency-stop" type="button">■ Stop &amp; restore GPS</button>
+        </div>
+      </header>
+
+      <div class="views">
+        <!-- ==================================================== MAP STUDIO -->
+        <section class="view active" id="view-map">
+          <div style="display:grid; grid-template-columns:minmax(0,1fr) 384px; gap:14px; padding:16px 20px 20px; min-height:0; flex:1 1 auto;">
+            <div class="map-frame fill">
+              <div id="map"></div>
+              <div class="map-overlay">
+                <span class="chip live"><span class="dot"></span> MAP CANVAS</span>
+                <span class="chip" id="map-hint">Click to move the target pin</span>
+              </div>
+              <div class="map-tools">
+                <button class="map-tool" id="map-center" title="Centre on target" type="button">◎</button>
+                <button class="map-tool" id="map-fit-route" title="Fit route" type="button">⤢</button>
+              </div>
+            </div>
+
+            <div style="overflow-y:auto; padding-right:4px; min-height:0;">
+              <!-- Target coordinate -->
+              <div class="panel">
+                <div class="panel-head">
+                  <h2>Coordinate Inspector</h2>
+                  <div class="right"><span class="tag cyan" id="target-tag">TARGET</span></div>
+                </div>
+                <div class="panel-body">
+                  <div class="field">
+                    <label for="input-search">SEARCH PLACE OR ADDRESS</label>
+                    <div style="display:flex; gap:7px;">
+                      <input id="input-search" type="search" placeholder="e.g. Reykjavík, Iceland" />
+                      <button class="btn" id="btn-search" type="button" aria-label="Search">↗</button>
+                    </div>
+                    <div class="hint" id="search-status">Geocoding uses OpenStreetMap Nominatim.</div>
+                  </div>
+
+                  <div class="divider"></div>
+
+                  <div class="field-row-3">
+                    <div class="field">
+                      <label for="input-lat">LATITUDE</label>
+                      <input id="input-lat" type="text" inputmode="decimal" value="47.010500" />
+                    </div>
+                    <div class="field">
+                      <label for="input-lon">LONGITUDE</label>
+                      <input id="input-lon" type="text" inputmode="decimal" value="28.863800" />
+                    </div>
+                    <div class="field">
+                      <label for="input-alt">ALT (M)</label>
+                      <input id="input-alt" type="number" step="1" value="15" />
+                    </div>
+                  </div>
+                  <div class="hint" id="coord-status">Coordinates are validated on the client and again in the bridge.</div>
+
+                  <div class="btn-row" style="margin-top:11px;">
+                    <button class="btn primary" id="btn-apply-coords" type="button">Apply to map</button>
+                    <button class="btn" id="btn-save-location" type="button">Save location</button>
+                  </div>
+
+                  <div class="banner-note warn" style="margin-top:12px;">
+                    <span class="icon">ⓘ</span>
+                    <div class="body">
+                      <strong>Altitude is metadata only</strong>
+                      <p>The iOS developer location API accepts latitude and longitude only. Altitude is stored, exported to GPX and shown in previews — it is never sent to the device.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Saved locations -->
+              <div class="panel">
+                <div class="panel-head">
+                  <h3>Saved locations</h3>
+                  <div class="right"><span class="sub" id="saved-count">0</span></div>
+                </div>
+                <div class="panel-body tight">
+                  <div class="list" id="saved-list" style="max-height:190px;">
+                    <div class="empty">No saved locations yet.</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Route builder -->
+              <div class="panel">
+                <div class="panel-head">
+                  <h3>Route builder</h3>
+                  <div class="right">
+                    <span class="sub" id="route-count">0 WAYPOINTS</span>
+                  </div>
+                </div>
+                <div class="panel-body">
+                  <label class="switch">
+                    <input type="checkbox" id="toggle-route-edit" />
+                    <span class="track"></span>
+                    <span class="switch-label">Route editing — map clicks add waypoints</span>
+                  </label>
+
+                  <div class="field-row" style="margin-top:12px;">
+                    <div class="field">
+                      <label for="input-speed">ROUTE SPEED (M/S)</label>
+                      <input id="input-speed" type="number" min="0.1" max="400" step="0.5" value="8" />
+                    </div>
+                    <div class="field">
+                      <label for="input-rate">UPDATE RATE (HZ)</label>
+                      <input id="input-rate" type="number" min="0.5" max="20" step="0.5" value="5" />
+                    </div>
+                  </div>
+
+                  <div class="metric-grid" style="margin-top:12px;">
+                    <div class="metric"><span>WAYPOINTS</span><strong id="metric-waypoints">0</strong></div>
+                    <div class="metric"><span>DISTANCE</span><strong id="metric-distance">0 <small>m</small></strong></div>
+                    <div class="metric"><span>DURATION</span><strong id="metric-duration">00:00</strong></div>
+                    <div class="metric"><span>DEVICE UPDATES</span><strong id="metric-updates">0</strong></div>
+                  </div>
+
+                  <div class="btn-row" style="margin-top:12px;">
+                    <button class="btn" id="btn-import-gpx" type="button">Import GPX</button>
+                    <button class="btn" id="btn-export-gpx" type="button">Export GPX</button>
+                    <button class="btn" id="btn-save-route" type="button">Save route</button>
+                    <button class="btn ghost" id="btn-clear-route" type="button">Clear</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Waypoint list -->
+              <div class="panel">
+                <div class="panel-head"><h3>Waypoints</h3><div class="right"><span class="sub">ORDER = PLAYBACK ORDER</span></div></div>
+                <div class="panel-body tight">
+                  <div class="list" id="waypoint-list" style="max-height:230px;">
+                    <div class="empty">Add at least two waypoints to build a route.</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Saved routes -->
+              <div class="panel">
+                <div class="panel-head"><h3>Saved routes</h3><div class="right"><span class="sub" id="routes-count">0</span></div></div>
+                <div class="panel-body tight">
+                  <div class="list" id="saved-routes" style="max-height:190px;">
+                    <div class="empty">No saved routes yet.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================== DEVICE CENTER -->
+        <section class="view" id="view-device">
+          <div class="scroll">
+            <div class="grid-2">
+              <div>
+                <div class="panel">
+                  <div class="panel-head">
+                    <h2>Connected iPhones</h2>
+                    <div class="right">
+                      <button class="btn tiny" id="btn-refresh-devices" type="button">Refresh</button>
+                      <button class="btn tiny primary" id="btn-discover-deep" type="button">Deep scan</button>
+                    </div>
+                  </div>
+                  <div class="panel-body">
+                    <div class="check-list" id="device-list">
+                      <div class="empty">No scan has been run yet.</div>
+                    </div>
+                    <div class="hint" id="discovery-status" style="margin-top:10px;">Discovery reports only what usbmuxd and lockdownd actually returned.</div>
+                  </div>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-head">
+                    <h2>Readiness diagnostics</h2>
+                    <div class="right">
+                      <span class="tag grey" id="readiness-tag">NOT RUN</span>
+                      <button class="btn tiny primary" id="btn-readiness" type="button">Run readiness check</button>
+                    </div>
+                  </div>
+                  <div class="panel-body">
+                    <div class="check-list" id="readiness-list">
+                      <div class="empty">Run the readiness check to verify USB, pairing, Developer Mode and the developer service.</div>
+                    </div>
+                    <div class="hint" id="readiness-summary" style="margin-top:10px;"></div>
+                  </div>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-head"><h2>Capability matrix</h2><div class="right"><span class="sub">WHAT THIS BUILD CAN ACTUALLY DO</span></div></div>
+                  <div class="panel-body tight">
+                    <div class="matrix" id="capability-matrix">
+                      <div class="matrix-row head"><span>CAPABILITY</span><span>STATUS</span><span>EVIDENCE</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div class="panel">
+                  <div class="panel-head"><h2>Bridge environment</h2><div class="right"><span class="tag" id="bridge-tag">UNKNOWN</span></div></div>
+                  <div class="panel-body">
+                    <dl class="kv" id="bridge-kv">
+                      <dt>STATE</dt><dd id="kv-bridge-state">—</dd>
+                      <dt>INTERPRETER</dt><dd id="kv-bridge-python">—</dd>
+                      <dt>PYMOBILEDEVICE3</dt><dd id="kv-bridge-pmd">—</dd>
+                      <dt>PLATFORM</dt><dd id="kv-bridge-platform">—</dd>
+                      <dt>USBMUXD</dt><dd id="kv-bridge-usbmux">—</dd>
+                      <dt>APPLE USB SERVICES</dt><dd id="kv-bridge-drivers">—</dd>
+                      <dt>WORKSPACE FILE</dt><dd id="kv-bridge-workspace">—</dd>
+                    </dl>
+                    <div class="btn-row" style="margin-top:12px;">
+                      <button class="btn tiny" id="btn-health" type="button">Re-check bridge</button>
+                      <button class="btn tiny ghost" id="btn-reveal-workspace" type="button">Reveal workspace file</button>
+                      <button class="btn tiny ghost" id="btn-open-setup" type="button">Bridge setup help</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-head"><h2>Setup checklist</h2><div class="right"><span class="sub">ON THE IPHONE</span></div></div>
+                  <div class="panel-body">
+                    <div class="check-list">
+                      <div class="check" data-ok="null" id="setup-check-driver"><span class="mark">1</span><div class="body"><div class="label">Install Apple's USB driver</div><div class="detail">Install “Apple Devices” from the Microsoft Store (or iTunes). This provides the Apple Mobile Device Service that exposes the iPhone through usbmuxd.</div></div></div>
+                      <div class="check" data-ok="null" id="setup-check-cable"><span class="mark">2</span><div class="body"><div class="label">Connect with a data cable</div><div class="detail">Charge-only cables expose the device to Windows power but not as a USB device.</div></div></div>
+                      <div class="check" data-ok="null" id="setup-check-trust"><span class="mark">3</span><div class="body"><div class="label">Tap Trust</div><div class="detail">Unlock the iPhone and accept the “Trust This Computer?” prompt, then enter the passcode.</div></div></div>
+                      <div class="check" data-ok="null" id="setup-check-developer-mode"><span class="mark">4</span><div class="body"><div class="label">Enable Developer Mode</div><div class="detail">Settings → Privacy &amp; Security → Developer Mode → on. The iPhone restarts and asks for the passcode. Location Studio never changes this setting for you.</div></div></div>
+                      <div class="check" data-ok="null" id="setup-check-unlocked"><span class="mark">5</span><div class="body"><div class="label">Keep the phone unlocked while simulating</div><div class="detail">Some developer services refuse to start on a locked device.</div></div></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-head"><h2>Bridge log</h2><div class="right"><button class="btn tiny ghost" id="btn-clear-log" type="button">Clear</button></div></div>
+                  <div class="panel-body tight">
+                    <div class="log" id="bridge-log"><div class="log-line info"><span class="t">--:--:--</span><span class="m">Waiting for the bridge…</span></div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===================================================== MOTION LAB -->
+        <section class="view" id="view-motion">
+          <div class="scroll" style="display:flex; flex-direction:column; gap:14px;">
+            <div class="banner-note">
+              <span class="icon">◐</span>
+              <div class="body">
+                <strong>Preview versus device — two different things</strong>
+                <p>Motion Lab animates a marker along your route in this window only. Nothing here touches the iPhone. Sending the route to the device happens in the Simulation Console, and the device state is reported there from the bridge.</p>
+              </div>
+            </div>
+
+            <div class="grid-2" style="align-items:stretch;">
+              <div class="panel" style="display:flex; flex-direction:column; min-height:520px;">
+                <div class="panel-head">
+                  <h2>Live preview</h2>
+                  <div class="right">
+                    <span class="tag violet" id="preview-state">IDLE</span>
+                    <span class="tag grey">PREVIEW ONLY</span>
+                  </div>
+                </div>
+                <div style="flex:1 1 auto; min-height:0; padding:11px;">
+                  <div class="map-frame" style="height:100%; min-height:460px;">
+                    <div id="preview-map"></div>
+                    <div class="map-overlay">
+                      <span class="chip live"><span class="dot"></span> MOTION PREVIEW</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div class="panel">
+                  <div class="panel-head"><h2>Playback</h2><div class="right"><span class="sub">HOST-SIDE ANIMATION</span></div></div>
+                  <div class="panel-body">
+                    <div class="field">
+                      <label for="range-speed">PLAYBACK MULTIPLIER <span id="label-speed">1.00×</span></label>
+                      <input id="range-speed" type="range" min="0.25" max="8" step="0.25" value="1" />
+                    </div>
+
+                    <div class="metric-grid" style="margin-top:13px;">
+                      <div class="metric"><span>PROGRESS</span><strong id="preview-progress">0<small>%</small></strong></div>
+                      <div class="metric"><span>ELAPSED</span><strong id="preview-elapsed">00:00</strong></div>
+                      <div class="metric"><span>GROUND SPEED</span><strong id="preview-speed">0.0 <small>m/s</small></strong></div>
+                      <div class="metric"><span>REMAINING</span><strong id="preview-remaining">00:00</strong></div>
+                    </div>
+
+                    <div class="progress-track" style="margin-top:12px;"><div class="progress-fill" id="preview-progress-bar"></div></div>
+
+                    <div class="btn-row" style="margin-top:12px;">
+                      <button class="btn primary" id="btn-preview-play" type="button">▶ Start</button>
+                      <button class="btn" id="btn-preview-pause" type="button" disabled>Ⅱ Pause</button>
+                      <button class="btn ghost" id="btn-preview-reset" type="button">■ Reset</button>
+                    </div>
+                    <div class="hint" id="preview-note" style="margin-top:10px;">With fewer than two waypoints the preview generates an illustrative path from the target pin.</div>
+                  </div>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-head"><h2>Send to device</h2><div class="right"><span class="sub">REAL OPERATION</span></div></div>
+                  <div class="panel-body">
+                    <div class="state-banner" id="motion-device-banner" data-state="stopped">
+                      <span class="state-dot"></span>
+                      <div class="state-text">
+                        <div class="state-title" id="motion-device-title">Device simulation idle</div>
+                        <div class="state-sub" id="motion-device-sub">No simulation is running.</div>
+                      </div>
+                    </div>
+                    <div class="btn-row" style="margin-top:12px;">
+                      <button class="btn primary" id="btn-send-route" type="button">Send route to iPhone</button>
+                      <button class="btn" id="btn-send-point" type="button">Send target pin</button>
+                      <button class="btn danger" id="btn-device-stop" type="button">Stop device simulation</button>
+                    </div>
+                    <div class="hint" id="motion-send-status" style="margin-top:10px;">Select a device in Device Center or the Simulation Console first.</div>
+                  </div>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-head"><h2>Route timeline</h2><div class="right"><span class="sub" id="timeline-count">0 WAYPOINTS</span></div></div>
+                  <div class="panel-body tight">
+                    <div class="list" id="timeline-list" style="max-height:200px;">
+                      <div class="empty">No waypoints yet.</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================ SIMULATION CONSOLE -->
+        <section class="view" id="view-console">
+          <div class="scroll">
+            <div class="console-split">
+              <div>
+                <div class="panel">
+                  <div class="panel-head">
+                    <h2>Active session</h2>
+                    <div class="right">
+                      <span class="tag grey" id="console-transport-tag">NO TRANSPORT</span>
+                      <span class="tag grey" id="console-ack-tag">NO ACKNOWLEDGEMENT</span>
+                    </div>
+                  </div>
+                  <div class="panel-body">
+                    <div class="state-banner" id="console-banner" data-state="idle">
+                      <span class="state-dot"></span>
+                      <div class="state-text">
+                        <div class="state-title" id="console-state-title">Idle</div>
+                        <div class="state-sub" id="console-state-sub">No location simulation has been started.</div>
+                      </div>
+                      <span class="spinner" id="console-spinner" hidden></span>
+                    </div>
+
+                    <div class="metric-grid" style="margin-top:13px;">
+                      <div class="metric"><span>PUBLISHED UPDATES</span><strong id="console-published">0</strong></div>
+                      <div class="metric"><span>ELAPSED</span><strong id="console-elapsed">00:00</strong></div>
+                      <div class="metric"><span>CURRENT TARGET</span><strong id="console-current" style="font-size:12px;">—</strong></div>
+                      <div class="metric"><span>ROUTE LENGTH</span><strong id="console-length">0 <small>m</small></strong></div>
+                    </div>
+
+                    <div class="progress-track" style="margin-top:12px;"><div class="progress-fill" id="console-progress-bar"></div></div>
+
+                    <div class="btn-row" style="margin-top:13px;">
+                      <button class="btn danger" id="btn-console-stop" type="button" disabled>■ Stop &amp; restore real GPS</button>
+                      <button class="btn" id="btn-console-pause" type="button" disabled>Ⅱ Pause</button>
+                      <button class="btn" id="btn-console-resume" type="button" disabled>▶ Resume</button>
+                      <button class="btn ghost" id="btn-console-refresh" type="button">Refresh state</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-head">
+                    <h2>Start a simulation</h2>
+                    <div class="right"><span class="sub" id="console-device-label">NO DEVICE SELECTED</span></div>
+                  </div>
+                  <div class="panel-body">
+                    <div class="check-list" id="console-readiness">
+                      <div class="empty">Run the readiness check for the selected device.</div>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <div class="btn-row">
+                      <button class="btn primary" id="btn-console-start-point" type="button">Start at target pin</button>
+                      <button class="btn primary" id="btn-console-start-route" type="button">Start route playback</button>
+                    </div>
+                    <div class="hint" style="margin-top:10px;" id="console-start-hint">
+                      The bridge applies the first coordinate before the session is reported as active, so a success here always means the device accepted it.
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <label class="switch">
+                      <input type="checkbox" id="toggle-route-loop" />
+                      <span class="track"></span>
+                      <span class="switch-label">Loop route playback until stopped</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-head">
+                    <h2>Verify on the device</h2>
+                    <div class="right"><button class="btn tiny" id="btn-screenshot" type="button">Capture device screen</button></div>
+                  </div>
+                  <div class="panel-body">
+                    <div class="hint">Open Maps or Find My on the iPhone, then capture its screen. This is the only independent check that the simulated position reached the phone — the bridge never claims success on its own.</div>
+                    <div id="screenshot-host" style="margin-top:11px;"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div class="panel">
+                  <div class="panel-head"><h2>Operation log</h2><div class="right"><button class="btn tiny ghost" id="btn-clear-console-log" type="button">Clear</button></div></div>
+                  <div class="panel-body tight">
+                    <div class="log" id="console-log" style="height:330px;"><div class="log-line info"><span class="t">--:--:--</span><span class="m">Console ready.</span></div></div>
+                  </div>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-head"><h2>Limitations</h2><div class="right"><span class="sub">READ THIS</span></div></div>
+                  <div class="panel-body">
+                    <div class="banner-note danger">
+                      <span class="icon">⚠</span>
+                      <div class="body">
+                        <strong>The override is not universal</strong>
+                        <p>Apple's developer location channel changes the position reported to CoreLocation. Apps that use independent positioning — Find My device tracking, carrier or emergency services, some streaming and banking apps with their own integrity checks — may ignore it or show something different.</p>
+                      </div>
+                    </div>
+                    <div class="banner-note warn" style="margin-top:11px;">
+                      <span class="icon">ⓘ</span>
+                      <div class="body">
+                        <strong>Stopping restores normal behaviour</strong>
+                        <p>Pressing Stop sends the clear command and closes the developer session. If the cable is unplugged, the iPhone returns to its real GPS automatically because the session ends with the connection.</p>
+                      </div>
+                    </div>
+                    <div class="banner-note warn" style="margin-top:11px;">
+                      <span class="icon">ⓘ</span>
+                      <div class="body">
+                        <strong>Pause granularity</strong>
+                        <p>Pause stops further updates at the next update interval. The iPhone keeps reporting the last published coordinate until you resume or stop.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="panel">
+                  <div class="panel-head"><h2>Session history</h2><div class="right"><span class="sub">THIS RUN</span></div></div>
+                  <div class="panel-body tight">
+                    <div class="list" id="history-list" style="max-height:220px;">
+                      <div class="empty">No sessions yet.</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+
+  <div class="modal-backdrop" id="modal" hidden>
+    <div class="modal">
+      <div class="panel-head">
+        <h2 id="modal-title">Details</h2>
+        <div class="right"><button class="btn tiny ghost" id="modal-close" type="button">Close</button></div>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

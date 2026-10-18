@@ -1,0 +1,73 @@
+{
+  "name": "location-studio-cyber",
+  "productName": "Location Studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Windows desktop workspace for real iPhone location simulation over USB",
+  "main": "electron/main.cjs",
+  "author": "Location Studio",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "vendor": "node scripts/vendor-assets.mjs",
+    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/ipc.cjs && node --check electron/validation.cjs && node --check electron/app-protocol.cjs && node --check electron/bridge-client.cjs && node --check electron/store.cjs && node --experimental-vm-modules scripts/check-renderer.mjs",
+    "test": "npm run test:js && npm run test:python",
+    "test:js": "node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \"tests/js/*.test.cjs\" \"tests/js/*.test.mjs\"",
+    "test:python": "node scripts/run-python-tests.mjs",
+    "smoke": "electron scripts/smoke-app.cjs",
+    "bridge:selfcheck": "node scripts/run-bridge.mjs selfcheck",
+    "bridge:discover": "node scripts/run-bridge.mjs discover",
+    "postinstall": "node scripts/vendor-assets.mjs",
+    "fix:wincodesign": "node scripts/unpack-wincodesign.mjs",
+    "dist": "electron-builder --win --x64",
+    "dist:dir": "electron-builder --win --x64 --dir"
+  },
+  "dependencies": {
+    "leaflet": "^1.9.4"
+  },
+  "devDependencies": {
+    "chrome-remote-interface": "^0.34.0",
+    "electron": "^35.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "studio.location.cyber",
+    "productName": "Location Studio",
+    "artifactName": "LocationStudio-${version}-win-${arch}.${ext}",
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "bridge/**/*.py",
+      "bridge/requirements.txt",
+      "scripts/run-bridge.mjs",
+      "!**/__pycache__/**",
+      "!**/*.pyc"
+    ],
+    "asarUnpack": [
+      "bridge/**"
+    ],
+    "extraResources": [
+      {
+        "from": "docs",
+        "to": "docs"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "artifactName": "LocationStudio-Setup-${version}.${ext}"
+    },
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    }
+  }
+}

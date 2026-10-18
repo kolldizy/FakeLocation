@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Location Studio test fixture" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk>
+    <name>Champ de Mars loop</name>
+    <trkseg>
+      <trkpt lat="48.855700" lon="2.298500"><ele>35</ele></trkpt>
+      <trkpt lat="48.857200" lon="2.297000"><ele>35</ele></trkpt>
+      <trkpt lat="48.858370" lon="2.294481"><ele>35</ele></trkpt>
+      <trkpt lat="48.860000" lon="2.293000"><ele>35</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>

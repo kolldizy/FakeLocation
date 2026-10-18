@@ -1,0 +1,19 @@
+# Dependencies and environments
+node_modules/
+.venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Build output and packaged artifacts
+release/
+
+# Generated reports and screenshots — they contain device identifiers,
+# so they stay on the machine that produced them.
+docs/reports/
+
+# Logs and OS clutter
+*.log
+Thumbs.db
+Desktop.ini

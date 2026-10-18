@@ -1,0 +1,16 @@
+# Location Studio device bridge (Python)
+#
+# Installed into the project-local virtual environment:
+#   py -3.11 -m venv .venv
+#   .venv\Scripts\python.exe -m pip install -r bridge\requirements.txt
+#
+# The bridge is the only component that talks to the iPhone.
+
+# Device protocol implementation (usbmux/lockdown/DVT). Pinned: the bridge uses
+# private-ish internal APIs of this package, so upgrades need re-verification.
+pymobiledevice3==11.35.0
+
+# Imported directly by gpx.py: defusedxml rejects DOCTYPE/entity payloads before
+# any element of an imported GPX file is touched. Also a transitive dependency of
+# pymobiledevice3, listed explicitly because this project imports it directly.
+defusedxml==0.7.1
