@@ -59,6 +59,12 @@ export const api = {
   checkReadiness: invoke("checkReadiness"),
   pairDevice: invoke("pairDevice"),
 
+  // Wireless link
+  probeWireless: invoke("probeWireless"),
+  connectWireless: invoke("connectWireless"),
+  disconnectWireless: invoke("disconnectWireless"),
+  getWirelessStatus: invoke("getWirelessStatus"),
+
   // Simulation
   startSimulation: invoke("startSimulation"),
   startRouteSimulation: invoke("startRouteSimulation"),

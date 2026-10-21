@@ -16,17 +16,26 @@ import { initMapStudio } from "./mapstudio.js";
 import { initDeviceCenter, runDiscovery, runReadiness, refreshHealth } from "./devicecenter.js";
 import { initMotionLab } from "./motionlab.js";
 import { initSimConsole } from "./simconsole.js";
+import { initWireless, refreshLinkStatus, renderWirelessChip } from "./wireless.js";
+import { initOverview, renderOverview } from "./overview.js";
+import { initSettings, renderSettings } from "./settings.js";
+import { initDeviceStrip, renderDeviceStrip } from "./devicestrip.js";
+import { NAVIGATE, EMERGENCY_STOP, LIMITATIONS } from "./nav.js";
 import { studioMap, previewMap } from "./maps.js";
 import { consoleLog, bridgeLog, toast, reportError } from "./logpanel.js";
 import { showInfo, confirmAction } from "./dialog.js";
 import { $, el } from "./util.js";
 
+/** Nav order, keyboard index and panel title for each workspace. */
 const VIEWS = {
-  map: { eyebrow: "MAP STUDIO / COORDINATE DESIGN", title: "Map Studio" },
-  device: { eyebrow: "DEVICE CENTER / HARDWARE TRUTH", title: "Device Center" },
-  motion: { eyebrow: "MOTION LAB / HOST-SIDE PREVIEW", title: "Motion Lab" },
-  console: { eyebrow: "SIMULATION CONSOLE / DEVICE OPERATIONS", title: "Simulation Console" },
+  overview: { eyebrow: "OVERVIEW / WHAT IS KNOWN", title: "Overview" },
+  map: { eyebrow: "LOCATION / PICK, CHECK, SIMULATE", title: "Location" },
+  motion: { eyebrow: "ROUTES / WAYPOINTS AND PLAYBACK", title: "Routes" },
+  device: { eyebrow: "DEVICE / HARDWARE AND LINK TRUTH", title: "Device" },
+  settings: { eyebrow: "SETTINGS / PREFERENCES AND SETUP", title: "Settings" },
 };
+
+const VIEW_ORDER = ["overview", "map", "motion", "device", "settings"];
 
 const SESSION_POLL_MS = 4000;
 
@@ -51,13 +60,24 @@ function switchView(view) {
 
   // Leaflet measures its container, so a hidden map must be re-measured on show.
   requestAnimationFrame(() => {
-    if (view === "map") studioMap.map?.invalidateSize();
+    if (view === "map") studioMap.invalidate();
     if (view === "motion") previewMap.invalidate();
   });
 
-  if ((view === "device" || view === "console") && bridgeAvailable) {
+  // Location and Device both act on device truth, so the first visit to either pays for
+  // a scan once. Overview deliberately does not: it summarises whatever the boot scan
+  // returned and only spends device traffic when its own button is pressed.
+  if ((view === "map" || view === "device") && bridgeAvailable) {
     ensurePrerequisites();
   }
+  // The link panels can be opened before anything was probed. Reading the retained
+  // status costs no device traffic, so it is safe to do on entry; the probe itself
+  // stays behind its button because it floods the network for several seconds.
+  if (view === "device" && bridgeAvailable && !state.wireless) {
+    refreshLinkStatus({ silent: true }).catch(() => {});
+  }
+  renderOverview();
+  renderSettings();
 }
 
 /** Lazily run discovery + readiness the first time a device view is opened. */
@@ -209,7 +229,7 @@ async function emergencyStop() {
     message: "Send the clear command and close the developer session on the iPhone?",
     confirmLabel: "Stop & restore GPS",
     danger: true,
-    hint: "This is the same operation as Stop in the Simulation Console.",
+    hint: "This is the same operation as Stop in the Location workspace.",
   });
   if (!confirmed) return;
   try {
@@ -229,7 +249,8 @@ function showLimitations() {
     "Carrier-assisted positioning and emergency services are not affected.",
     "Apps that verify integrity or use their own location attestation may ignore the override.",
     "Altitude is never sent: the developer selector accepts latitude and longitude only.",
-    "The override lives as long as the developer session. Unplugging the cable ends it and the iPhone immediately returns to its real GPS.",
+    "The override lives as long as the developer session. Unplugging the cable — or losing the Wi-Fi link, the phone sleeping, or the Apple Mobile Device Service stopping — ends it and the iPhone immediately returns to its real GPS.",
+    "Wireless needs its own one-time setup: a USB pairing record does not switch Wi-Fi communication on, and the phone has to be on the same, non-isolated network as this PC.",
   ];
 
   showInfo({
@@ -274,6 +295,13 @@ function bindGlobalEvents() {
     button.addEventListener("click", () => switchView(button.dataset.view));
   }
 
+  // A view asks for these instead of reaching into the shell (see nav.js).
+  document.addEventListener(NAVIGATE, (event) => switchView(event.detail?.view));
+  document.addEventListener(EMERGENCY_STOP, () => {
+    emergencyStop().catch(() => {});
+  });
+  document.addEventListener(LIMITATIONS, () => showLimitations());
+
   $("btn-restart-bridge").addEventListener("click", () => {
     restartBridge().catch(() => {});
   });
@@ -285,9 +313,8 @@ function bindGlobalEvents() {
     if (event.ctrlKey || event.altKey || event.metaKey) return;
     const tag = document.activeElement?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-    const order = ["map", "device", "motion", "console"];
     const index = Number(event.key);
-    if (Number.isInteger(index) && index >= 1 && index <= order.length) switchView(order[index - 1]);
+    if (Number.isInteger(index) && index >= 1 && index <= VIEW_ORDER.length) switchView(VIEW_ORDER[index - 1]);
   });
 
   if (bridgeAvailable) {
@@ -322,19 +349,31 @@ async function boot() {
   initMapStudio();
   initDeviceCenter();
   initMotionLab();
+  initWireless();
   initSimConsole();
+  initOverview();
+  initSettings();
+  initDeviceStrip();
   bindGlobalEvents();
 
   subscribe(() => {
     deviceChip();
     renderChips();
     renderBridgeChip();
+    renderWirelessChip();
+    renderDeviceStrip();
+    renderOverview();
+    renderSettings();
   });
   deviceChip();
   renderChips();
   renderBridgeChip();
+  renderWirelessChip();
+  renderDeviceStrip();
 
-  switchView(state.view || "map");
+  // Always open on Overview. `state.view` is not part of the workspace document, so
+  // honouring it would only ever replay the previous run's last click.
+  switchView("overview");
 
   if (bridgeAvailable) {
     try {

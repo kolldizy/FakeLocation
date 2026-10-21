@@ -26,8 +26,10 @@ const STATUS_BADGES = {
 const STAGES = [
   { key: "usbDetected", label: "USB" },
   { key: "paired", label: "PAIRED" },
+  { key: "wirelessReachable", label: "WI-FI" },
   { key: "developerModeEnabled", label: "DEV MODE" },
   { key: "developerServiceAvailable", label: "DEV SERVICE" },
+  { key: "tunnelOverWireless", label: "WI-FI TUNNEL" },
   { key: "simulationReady", label: "SIM READY" },
 ];
 
@@ -62,6 +64,23 @@ function deviceSubtitle(device) {
   if (identity.buildVersion) parts.push(`build ${identity.buildVersion}`);
   parts.push(`${device.connectionType || "unknown link"} · ${device.deviceId}`);
   return parts.join(" · ");
+}
+
+/**
+ * The mediums this process has actually reached the device on. `proven` is a record of
+ * handshakes, `selected` is an explicit choice, and the two are reported apart so a
+ * scan that merely saw a network entry cannot read as "the session is wireless".
+ */
+function linkLine(device) {
+  const link = device.link;
+  if (!link) return null;
+  const proven = link.proven?.transports || [];
+  const parts = [proven.length ? `reached on ${proven.join(", ")}` : "reached on nothing yet"];
+  parts.push(link.selected ? `using ${link.selected.transport}` : "no transport chosen, so a cable wins");
+  if (link.activeSession?.open) {
+    parts.push(`session open on ${link.activeSession.transport || "an unreported transport"}${link.activeSession.wireless ? " · wireless" : " · cable"}`);
+  }
+  return el("div", { className: "hint", attrs: { style: "margin-top:4px;" }, text: `Link: ${parts.join(" · ")}.` });
 }
 
 /* ------------------------------------------------------------------- devices */
@@ -102,6 +121,7 @@ function deviceCard(device) {
               text: `Transport: ${device.transport.planned} — ${device.transport.rationale}`,
             })
           : null,
+        linkLine(device),
       ]),
     ]),
     el("div", { className: "btn-row" }, [select, pair]),
@@ -197,7 +217,8 @@ export async function runDiscovery({ deep }) {
         // The bridge reports `null` for stages a cheap scan cannot see (pairing,
         // Developer Mode) and for stages it has no observation about at all. A fresh
         // non-null value is newer and wins; `null` falls back to what was seen before.
-        stages: { ...mergeStages(previous.stages, device.stages), usbDetected: true },
+        // `usbDetected` is not forced: the scan states the medium it actually saw.
+        stages: mergeStages(previous.stages, device.stages),
         issues: device.issues.length ? device.issues : previous.issues,
       };
     });
@@ -295,7 +316,10 @@ function renderReadiness() {
   tag.className = report.ready ? "tag green" : "tag red";
   tag.textContent = report.ready ? "READY" : "NOT READY";
   for (const [index, check] of (report.checks || []).entries()) host.appendChild(checkRow(check, index));
-  $("readiness-summary").textContent = `${report.summary} Checked ${fmtTimestamp(report.checkedAt)}.`;
+  const medium = report.transport
+    ? `Checked over ${report.transportLabel || report.transport}${report.wireless ? " with the cable free" : ""}.`
+    : "The bridge did not name the transport this check ran over.";
+  $("readiness-summary").textContent = `${report.summary} ${medium} Checked ${fmtTimestamp(report.checkedAt)}.`;
 }
 
 /**
@@ -315,7 +339,7 @@ function applyMeasuredFacts(report) {
   setState({ devices });
 }
 
-export async function runReadiness({ silent = false, deviceId = null } = {}) {
+export async function runReadiness({ silent = false, deviceId = null, transport = null } = {}) {
   const target = deviceId || state.selectedDeviceId;
   if (!target) {
     if (!silent) toast("No device selected", "Choose a device in the list first.", { kind: "warn" });
@@ -326,14 +350,22 @@ export async function runReadiness({ silent = false, deviceId = null } = {}) {
     return;
   }
   $("btn-readiness").disabled = true;
-  $("readiness-tag").textContent = "RUNNING…";
+  $("readiness-tag").textContent = transport ? `RUNNING · ${String(transport).toUpperCase()}…` : "RUNNING…";
   $("readiness-tag").className = "tag cyan";
   try {
-    const report = await api.checkReadiness({ deviceId: target, openTunnel: true });
+    const request = { deviceId: target, openTunnel: true };
+    // Pinning is what makes a wireless pass mean wireless. When a cable and a network
+    // entry both exist, usbmuxd answers on the cable, so an unpinned check can go green
+    // over a medium nobody asked about.
+    if (transport) request.transport = transport;
+    const report = await api.checkReadiness(request);
     setState({ readiness: report, readyDeviceId: report.ready ? target : state.readyDeviceId });
     readinessSignature = ""; // the report changed identity, so redraw
     renderReadiness();
-    bridgeLog.write(report.ready ? "ok" : "warn", `Readiness for ${target}: ${report.summary}`);
+    bridgeLog.write(
+      report.ready ? "ok" : "warn",
+      `Readiness for ${target}${report.transport ? ` over ${report.transport}` : ""}: ${report.summary}`
+    );
     applyMeasuredFacts(report);
     if (!silent) {
       toast(report.ready ? "Device ready" : "Not ready yet", report.summary, { kind: report.ready ? "ok" : "warn", sticky: !report.ready });
@@ -397,9 +429,30 @@ async function loadCapabilities() {
   try {
     const report = await api.getCapabilities(state.selectedDeviceId ? { deviceId: state.selectedDeviceId } : {});
     setState({ capabilities: report.capabilities || [] });
+    renderCapabilityProvenance(report.provenance || null);
   } catch (error) {
     consoleLog.write("warn", `Capability matrix could not be loaded: ${error.message}`);
   }
+}
+
+/**
+ * Put a date and a device under every "VERIFIED / HARDWARE" badge.
+ *
+ * The matrix is authored, not measured: it says what this build was once shown to do. Without
+ * this line a green badge in a panel that is not scanning anything reads as a claim about the
+ * phone on the desk, which is exactly the kind of inference the brief forbids.
+ */
+function renderCapabilityProvenance(provenance) {
+  const host = $("capability-provenance");
+  if (!host) return;
+  const attached = state.devices.length;
+  if (!provenance) {
+    host.textContent = `The bridge sent no provenance with these rows, so treat every hardware badge as unverified. This session has ${attached} iPhone(s) attached.`;
+    return;
+  }
+  host.textContent =
+    `“Verified on hardware” means reproduced by hand on ${provenance.verifiedOn} against ${provenance.bench}. ` +
+    `${provenance.note} This session has ${attached} iPhone(s) attached, and only a deep scan measures them.`;
 }
 
 /* ------------------------------------------------------------------- bridge UI */
@@ -422,8 +475,11 @@ function renderBridge() {
     $("kv-bridge-pmd").textContent = health.pymobiledevice3?.available
       ? health.pymobiledevice3.version
       : `not installed — ${health.pymobiledevice3?.error || "unknown error"}`;
+    // Windows 11 reports release "10" through the version APIs unless the calling
+    // process declares compatibility, so the build number is shown next to it —
+    // otherwise this row states a version the machine is not.
     $("kv-bridge-platform").textContent = health.platform
-      ? `${health.platform.system} ${health.platform.release} (${health.platform.machine})`
+      ? `${health.platform.system} ${health.platform.release}${health.platform.version ? ` · build ${health.platform.version}` : ""} (${health.platform.machine})`
       : "—";
     $("kv-bridge-usbmux").textContent = health.usbmux?.available
       ? `${health.usbmux.address} · ${health.usbmux.deviceCount} device(s)`

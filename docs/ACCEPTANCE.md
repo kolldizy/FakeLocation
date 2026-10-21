@@ -6,6 +6,11 @@ USB, paired, Developer Mode enabled. The device UDID and machine user name are
 masked in this published copy; the generated reports below are not published (they
 contain device identifiers).
 
+This is a snapshot of that day's tree. The wireless transport work and the UI
+redesign landed afterwards, so nothing here says anything about them — a record of
+USB success is not evidence of wireless success, and re-running the command below
+against a phone would exercise the current bridge instead.
+
 The run drives the **shipped** device bridge (`python -m location_studio_bridge serve`)
 over the same newline-delimited JSON protocol Electron uses — not a lab script that
 bypasses it. Artifacts produced by the run (not published; reproducible with the
@@ -107,7 +112,7 @@ Stated explicitly so nothing is over claimed:
 | Physically unplugging the cable mid-session | The disconnection path is covered by unit tests with a fake usbmuxd (`DEVICE_DISCONNECTED`, session ends, device released). The physical cable-pull was not performed in this run. |
 | A fresh Trust prompt | The device was already paired, so only the pairing *record* was verified. |
 | Any iOS 16 or older device | The legacy `com.apple.dt.simulatelocation` path remains `documented`, never hardware-verified. |
-| Wi-Fi / network-attached devices | Not offered for simulation; status stays `unknown`. |
+| Wi-Fi / network-attached devices | Nothing over the network was exercised on 2026-10-18: this run used a cable only. Wireless support landed after it and has **never** been run against a phone; [COMPATIBILITY.md](COMPATIBILITY.md) is the authority for what each wireless transport is verified, documented or unknown. |
 | Apple's own apps (Apple Maps, Find My, Safari) | Only a third-party map app (Google Maps) was verified on screen. System services that resolve the device through Apple's servers — Find My device tracking in particular — are not covered by the developer channel and were not tested. |
 | Locked-device behaviour | A screenshot taken while locked returned a black frame; the app keeps "unlocked" as not-checked because it is not observable. |
 | The packaged build running the full acceptance route | The packaged app was verified to start, reach readiness and drive the device flow (table above); the 35-check set/route run used the development tree. |

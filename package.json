@@ -10,11 +10,12 @@
   "scripts": {
     "start": "electron .",
     "vendor": "node scripts/vendor-assets.mjs",
-    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/ipc.cjs && node --check electron/validation.cjs && node --check electron/app-protocol.cjs && node --check electron/bridge-client.cjs && node --check electron/store.cjs && node --experimental-vm-modules scripts/check-renderer.mjs",
+    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/ipc.cjs && node --check electron/validation.cjs && node --check electron/app-protocol.cjs && node --check electron/bridge-client.cjs && node --check electron/store.cjs && node --check scripts/smoke-app.cjs && node --check scripts/capture-ui.cjs && node --experimental-vm-modules scripts/check-renderer.mjs",
     "test": "npm run test:js && npm run test:python",
     "test:js": "node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \"tests/js/*.test.cjs\" \"tests/js/*.test.mjs\"",
     "test:python": "node scripts/run-python-tests.mjs",
     "smoke": "electron scripts/smoke-app.cjs",
+    "capture:ui": "electron scripts/capture-ui.cjs",
     "bridge:selfcheck": "node scripts/run-bridge.mjs selfcheck",
     "bridge:discover": "node scripts/run-bridge.mjs discover",
     "postinstall": "node scripts/vendor-assets.mjs",

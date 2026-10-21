@@ -23,6 +23,13 @@ export const state = {
   /** @type {Array<object>|null} */
   capabilities: null,
 
+  /** @type {object|null} last wireless probe report, verbatim from the bridge */
+  wireless: null,
+  /** @type {object|null} proven / selected / active-session transports for one device */
+  wirelessLink: null,
+  /** @type {object|null} live developer tunnel status */
+  wirelessTunnel: null,
+
   bridge: { state: "stopped", detail: "Bridge has not been started yet." },
   health: null,
   appInfo: null,
@@ -30,6 +37,8 @@ export const state = {
   target: { ...DEFAULT_TARGET },
   route: [],
   routeEditing: false,
+  /** Index of the waypoint the user last selected, or -1. UI-only, never persisted. */
+  selectedWaypoint: -1,
   routeOptions: { speedMps: 8, updateRateHz: 5, interpolate: true, loop: false },
 
   savedLocations: [],

@@ -19,8 +19,8 @@ documentation suggests.
 | Pause/resume is route-only | A running route can be paused and resumed (verified). A fixed location cannot: the protocol has no such operation, and the bridge answers `UNSUPPORTED_OPERATION` instead of pretending. |
 | Speed is host-side pacing | Route speed is produced by publishing coordinates at a controlled rate from the PC (measured pace error: 0.09 s over a 25.46 s route). It does not change any setting on the phone group. |
 | Motion sensors are not spoofed | Accelerometer, gyroscope and step counting are untouched. Apps that fuse GPS with motion data may notice the inconsistency. |
-| One USB device at a time | One bridge process owns one tunnel for one selected device. A session request for a different device is refused (`SIMULATION_ACTIVE` or a device-mismatch error). Two iPhones cannot be simulated simultaneously. |
-| Wi-Fi devices are not offered | The tunnel targets a USB-attached device. Network-attached devices may appear in discovery, but simulation for them stays `unknown` and is not offered. |
+| One device at a time | One bridge process owns one developer session for one selected device, over whichever allowlisted transport it proved. A session request for a different device is refused (`SIMULATION_ACTIVE` or a device-mismatch error). Two iPhones cannot be simulated simultaneously. |
+| Wi-Fi is implemented but unproven | The bridge separates USB, `wifi-mux` (a network entry through the same usbmuxd pipe), `rsd-lan` (RemoteServiceDiscovery answered on the LAN) and `wifi-lockdown` (seen only, never offered). Identity reads pin the connection type so a Wi-Fi answer cannot be a USB answer in disguise. **No wireless-capable iPhone was ever attached while this build was verified**, so the tunnel and simulation over Wi-Fi stay `unknown`, and the app refuses to label a session wireless while the cable is attached — usbmuxd prefers the USB entry, so such a run would prove nothing about Wi-Fi. The supported, verified connection method remains the cable. |
 | iOS 16 and older | Implemented against the legacy `com.apple.dt.simulatelocation` lockdown service, but **never hardware-tested** (no compatible device was available). That path is fire-and-forget: the bridge reports `deviceAcknowledged: false` and never labels the result hardware-confirmed. |
 | Only Windows x64 is packaged | The app and bridge are not tested on macOS or Linux, and only `win-x64` artifacts are produced. |
 
@@ -41,6 +41,7 @@ documentation suggests.
 | --- | --- |
 | Installing drivers, TUN/TAP adapters or MDM profiles | Requires administrator rights and would change the machine's security posture. The iOS 17+ path uses a userspace RSD tunnel and needs no elevation (verified from a non-elevated process). |
 | Enabling Developer Mode | It is a security setting that only the device owner can change, on the phone, with a device restart. |
+| Reading pairing material | The bridge lists the pairing-record folders and counts `*.plist` files by name (`remote_*` versus the rest) to answer "is a RemotePairing bootstrap present". File contents are never opened, and no key, token or record body reaches the renderer, the logs, or this repository. Where the system folder is not readable by an unprivileged process, the count is reported as *not countable* rather than as zero. |
 | Hiding the simulation from the phone's owner | Out of scope: no jailbreak, no hooks, no persistent artefacts. |
 | Auto-installing Python or packages | The app reports what is missing and how to install it; it never runs a package manager by itself. |
 | Exposing arbitrary shell or commands to the UI | The renderer can only call a fixed JSON-RPC allowlist through the preload bridge; there is no generic `invoke` and the CSP is locked to the app's own origin plus the two tile hosts and the geocoder. |
@@ -50,9 +51,26 @@ documentation suggests.
 * Physically unplugging the cable mid-session (unit tests cover the failure path).
 * A fresh Trust prompt on an unpaired device (the test device was already paired).
 * Any iOS 16 or older device.
-* Wi-Fi / network-attached devices.
+* **Every wireless case.** A network usbmuxd entry has never been observed from this PC,
+  so nothing has been measured on `wifi-mux` or `rsd-lan`: not the identity read, not the
+  developer tunnel, not a location write. On 2026-10-21 the probe ran against a real
+  iPhone 16 Pro (iOS 27.0.1) attached over USB with Wi-Fi sync reported as enabled, and
+  it still saw no network entry, no reachable RSD and no pairing record that matched an
+  advertisement — so the probe has now been exercised against hardware, but only ever to
+  measure the *absence* of a wireless endpoint. Its verdict wording ("this PC could not
+  ask" versus "no device answered") is unit-tested with a fake network rather than
+  confirmed on one.
+* Starting a pairing from scratch (`devices.pair` / the RemotePairing bootstrap) against
+  a device that is not already trusted.
+* Client-isolated networks, VPN adapters and firewalls that drop UDP 5353 — the probe
+  reports per-interface failures, but no such network was available to test on.
 * Multiple iPhones attached at once.
 * Apple's own apps (Apple Maps, Find My, Safari) against a simulated position.
 * The packaged build performing an actual location set (the packaged app was verified
   to start, reach readiness and drive the developer service; the recorded set/route
   acceptance run used the development tree).
+
+The UI and wireless work in this repository's latest commits was verified with **no
+iPhone attached at all**: the hardware row above is the earlier USB record, and every
+wireless claim in the app is `documented` or `unknown` because there was no device to
+turn it into evidence.

@@ -1,8 +1,8 @@
 /**
- * Map Studio — coordinate design and route building.
+ * Location — the destination, the saved places and the waypoint list.
  *
- * Everything in this view is design-time data. Nothing here touches the iPhone;
- * the only device-facing operations live in Motion Lab and the Simulation Console.
+ * Everything in this view is design-time data. Nothing here touches the iPhone; the
+ * device-facing operations live in the control dock beside this map and in Routes.
  *
  * Route metrics are requested from the bridge (`route.analyze`) so the numbers the
  * user sees are the same numbers the device playback will use. A local calculation
@@ -11,9 +11,10 @@
 
 import { api, available as bridgeAvailable } from "./api.js";
 import { state, setState, subscribe, newId, persistWorkspace } from "./store.js";
-import { studioMap } from "./maps.js";
+import { studioMap, previewMap } from "./maps.js";
 import { promptText, confirmAction } from "./dialog.js";
 import { consoleLog, toast, reportError } from "./logpanel.js";
+import { navigate } from "./nav.js";
 import {
   $,
   el,
@@ -28,6 +29,9 @@ import {
   validateAltitude,
   routeLengthM,
   buildPlaybackPoints,
+  withWaypointMoved,
+  withWaypointRemoved,
+  withWaypointReordered,
   debounce,
 } from "./util.js";
 
@@ -163,47 +167,106 @@ function renderLocations() {
 
 /* ------------------------------------------------------------- route editing */
 
-function addWaypoint(lat, lon, altitude) {
+/** Shared with Routes: clicking that map while editing appends through this function. */
+export function addWaypoint(lat, lon, altitude) {
   const point = { lat, lon, ...(altitude === undefined || altitude === null ? {} : { altitude }) };
-  setState({ route: [...state.route, point] });
+  setState({ route: [...state.route, point], selectedWaypoint: state.route.length });
   persistWorkspace();
-  setHint("coord-status", `Waypoint ${state.route.length} added.`, "ok");
+  setHint("coord-status", `Waypoint ${state.route.length} added at ${fmtCoordPair(lat, lon)}.`, "ok");
+}
+
+/** The Editing switch and the two map buttons set the same flag; this is the only writer. */
+export function setEditing(editing) {
+  setState({ routeEditing: Boolean(editing) });
+}
+
+/**
+ * Move one waypoint.
+ *
+ * Dragging a marker is the only way to edit a coordinate in place, and it has to write
+ * back through here so the list, the metrics, the polyline and the preview all follow
+ * the same state object rather than a copy.
+ */
+export function updateWaypoint(index, lat, lon) {
+  const current = state.route[index];
+  if (!current) return;
+  if (current.lat === lat && current.lon === lon) return;
+  const next = withWaypointMoved(state.route, index, lat, lon);
+  setState({ route: next, selectedWaypoint: index });
+  persistWorkspace();
+  setHint("coord-status", `Waypoint ${index + 1} moved to ${fmtCoordPair(lat, lon)}.`, "ok");
+}
+
+/** Selecting is a shared act: the marker ring, the list row and the map centre agree on it. */
+export function selectWaypoint(index, { focus = true } = {}) {
+  const clamped = index >= 0 && index < state.route.length ? index : -1;
+  setState({ selectedWaypoint: clamped });
+  if (clamped < 0 || !focus) return;
+  const point = state.route[clamped];
+  studioMap.focusWaypoint(point);
+  // Routes shows the same route on its own map. Moving that view too costs no device
+  // traffic and keeps the two surfaces describing one plan, but only when it exists.
+  if (previewMap.map) previewMap.focusWaypoint(point);
+}
+
+/** The ⊙ tool does the same act as clicking a row: find the waypoint the user picked. */
+export function selectedWaypointPoint() {
+  if (state.selectedWaypoint < 0 || state.selectedWaypoint >= state.route.length) return null;
+  return state.route[state.selectedWaypoint];
+}
+
+function focusSelectedOnStudioMap() {
+  const point = selectedWaypointPoint();
+  if (!point) {
+    toast("No waypoint selected", "Click a numbered marker or a row in the Waypoints list first.", { kind: "warn" });
+    return;
+  }
+  studioMap.focusWaypoint(point);
+}
+
+function removeWaypoint(index) {
+  const route = withWaypointRemoved(state.route, index);
+  if (route.length === state.route.length) return;
+  setState({ route, selectedWaypoint: -1 });
+  persistWorkspace();
+  setHint("coord-status", `Waypoint ${index + 1} removed. ${route.length} left.`, "ok");
 }
 
 function moveWaypoint(index, direction) {
-  const next = [...state.route];
-  const target = index + direction;
-  if (target < 0 || target >= next.length) return;
-  [next[index], next[target]] = [next[target], next[index]];
-  setState({ route: next });
+  const next = withWaypointReordered(state.route, index, direction);
+  if (next === state.route) return;
+  setState({ route: next, selectedWaypoint: index + direction });
   persistWorkspace();
 }
 
 function waypointRow(point, index) {
+  const selected = state.selectedWaypoint === index;
+
   const up = el("button", { className: "btn tiny ghost", text: "↑", attrs: { type: "button", title: "Move earlier" } });
   up.disabled = index === 0;
-  up.addEventListener("click", () => moveWaypoint(index, -1));
+  up.addEventListener("click", (event) => {
+    event.stopPropagation();
+    moveWaypoint(index, -1);
+  });
 
   const down = el("button", { className: "btn tiny ghost", text: "↓", attrs: { type: "button", title: "Move later" } });
   down.disabled = index === state.route.length - 1;
-  down.addEventListener("click", () => moveWaypoint(index, 1));
-
-  const remove = el("button", { className: "btn tiny danger", text: "✕", attrs: { type: "button", title: "Remove" } });
-  remove.addEventListener("click", () => {
-    setState({ route: state.route.filter((_, position) => position !== index) });
-    persistWorkspace();
+  down.addEventListener("click", (event) => {
+    event.stopPropagation();
+    moveWaypoint(index, 1);
   });
 
-  const label = el("button", { className: "btn tiny", text: "◎", attrs: { type: "button", title: "Centre map here" } });
-  label.addEventListener("click", () => {
-    studioMap.map.setView([point.lat, point.lon], Math.max(studioMap.map.getZoom(), 14));
+  const remove = el("button", { className: "btn tiny danger", text: "✕", attrs: { type: "button", title: "Remove this waypoint" } });
+  remove.addEventListener("click", (event) => {
+    event.stopPropagation();
+    removeWaypoint(index);
   });
 
-  return el("div", { className: "list-row" }, [
+  const row = el("div", { className: `list-row selectable${selected ? " selected" : ""}`, attrs: { role: "button", tabindex: "0" } }, [
     el("div", {
-      className: "device-glyph",
+      className: "wp-number",
       text: String(index + 1),
-      attrs: { style: "flex:0 0 30px; width:30px; height:30px; font-size:11px; border-radius:7px;" },
+      attrs: { title: "Route order" },
     }),
     el("div", { className: "grow" }, [
       el("div", { className: "name", text: fmtCoordPair(point.lat, point.lon) }),
@@ -212,15 +275,24 @@ function waypointRow(point, index) {
         text: point.altitude !== undefined ? `altitude ${point.altitude} m (metadata only)` : "no altitude recorded",
       }),
     ]),
-    label,
+    remove,
     up,
     down,
-    remove,
   ]);
+
+  // The row is the keyboard-reachable way to find a waypoint on the map.
+  row.addEventListener("click", () => selectWaypoint(index));
+  row.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    selectWaypoint(index);
+  });
+
+  return row;
 }
 
 function renderWaypoints() {
-  const nextSignature = signature(state.route);
+  const nextSignature = signature({ route: state.route, selected: state.selectedWaypoint });
   if (nextSignature === routeSignature) return;
   routeSignature = nextSignature;
 
@@ -228,12 +300,14 @@ function renderWaypoints() {
   clear(host);
   $("route-count").textContent = `${state.route.length} WAYPOINT${state.route.length === 1 ? "" : "S"}`;
   if (!state.route.length) {
-    host.appendChild(el("div", { className: "empty", text: "Add at least two waypoints to build a route." }));
+    host.appendChild(
+      el("div", { className: "empty", html: "<b>No waypoints yet.</b> Press <b>+ Add target pin</b>, or turn on <b>Edit Route</b> and click either map." })
+    );
     studioMap.redrawRoute(state.route, -1);
     return;
   }
   state.route.forEach((point, index) => host.appendChild(waypointRow(point, index)));
-  studioMap.redrawRoute(state.route, -1);
+  studioMap.redrawRoute(state.route, state.selectedWaypoint);
 }
 
 function renderSavedRoutes() {
@@ -262,10 +336,17 @@ function renderSavedRoutes() {
       toast("Route loaded", `${route.name} — ${route.points.length} waypoints`, { kind: "ok" });
     });
 
-    const send = el("button", { className: "btn tiny ghost", text: "→ Send", attrs: { type: "button" } });
+    // Loading a saved route is still a design-time act: the phone is only asked to
+    // follow it after the user presses the labelled button in the Routes toolbar.
+    const send = el("button", { className: "btn tiny ghost", text: "→ Send", attrs: { type: "button", title: "Put this route in the editor and open Routes" } });
     send.addEventListener("click", () => {
-      setState({ route: route.points.map((point) => ({ ...point })) });
-      setState({ view: "console" });
+      setState({
+        route: route.points.map((point) => ({ ...point })),
+        routeOptions: { ...state.routeOptions, ...(route.options || {}) },
+      });
+      persistWorkspace();
+      navigate("motion");
+      toast("Route ready", `${route.name} is loaded. Press “▶ Device route” to start it on the iPhone.`, { kind: "ok" });
     });
 
     const remove = el("button", { className: "btn tiny danger", text: "✕", attrs: { type: "button", title: "Delete" } });
@@ -424,7 +505,7 @@ async function importGpx() {
       parsed.geometry === "waypoints"
         ? { ...state.routeOptions, interpolate: false }
         : { ...state.routeOptions };
-    setState({ route: parsed.points.map((point) => ({ ...point })), routeOptions: options });
+    setState({ route: parsed.points.map((point) => ({ ...point })), routeOptions: options, selectedWaypoint: -1 });
     $("input-speed").value = String(state.routeOptions.speedMps);
     $("input-rate").value = String(state.routeOptions.updateRateHz);
     studioMap.fitRoute(state.route);
@@ -529,11 +610,33 @@ async function saveRoute() {
 /* ---------------------------------------------------------------------- init */
 
 function setMapMode() {
-  const editing = state.routeEditing;
-  $("toggle-route-edit").checked = editing;
+  const editing = Boolean(state.routeEditing);
+
+  const switchInput = $("toggle-route-edit");
+  if (switchInput.checked !== editing) switchInput.checked = editing;
+
+  for (const id of ["btn-edit-route-map", "btn-edit-route-preview"]) {
+    const button = $(id);
+    if (!button) continue;
+    button.setAttribute("aria-pressed", String(editing));
+    button.classList.toggle("active", editing);
+  }
+
+  // Both maps need to say, before the click happens, what the click will do.
   $("map-hint").textContent = editing
-    ? "Route editing — click the map to append a waypoint"
-    : "Click to move the target pin";
+    ? "EDIT ROUTE ON · A CLICK HERE APPENDS A WAYPOINT"
+    : "EDIT ROUTE OFF · A CLICK HERE MOVES THE TARGET PIN";
+  $("map-hint").className = editing ? "chip warn" : "chip";
+
+  const help = $("waypoint-help");
+  if (help) {
+    help.textContent = editing
+      ? "Editing is on: a click on either map appends a waypoint at the clicked coordinates. Drag a numbered marker to move one; its number is its place in the route."
+      : "Editing is off: map clicks pan or move the target pin. Turn on Edit Route to place waypoints by clicking.";
+  }
+
+  studioMap.setEditStyle(editing);
+  if (previewMap.map) previewMap.setEditStyle(editing);
 }
 
 export function initMapStudio() {
@@ -545,7 +648,7 @@ export function initMapStudio() {
     lon: state.settings.mapCenter?.lon ?? state.target.lon,
     zoom: state.settings.mapCenter?.zoom ?? 12,
   });
-  if (state.settings.tileStyle === "osm") studioMap.setTileStyle("osm");
+  studioMap.setTileStyle(state.settings.tileStyle === "osm" ? "osm" : "dark");
 
   studioMap.onTargetChange = (lat, lon) => {
     applyTarget(lat, lon, { altitude: state.target.altitude, source: "map drag" });
@@ -561,9 +664,15 @@ export function initMapStudio() {
     setHint("coord-status", "Target moved from the map.", "ok");
   };
 
+  // Dragging a marker is the in-place coordinate editor. Writing through the store is
+  // what makes the list, the metrics, the polyline and the Routes preview follow it.
+  studioMap.onWaypointDrag = (index, lat, lon) => updateWaypoint(index, lat, lon);
+  studioMap.onWaypointSelect = (index) => selectWaypoint(index, { focus: false });
+
   $("map-center").addEventListener("click", () => {
     studioMap.map.setView([state.target.lat, state.target.lon], Math.max(studioMap.map.getZoom(), 13));
   });
+  $("map-focus-selected").addEventListener("click", () => focusSelectedOnStudioMap());
   $("map-fit-route").addEventListener("click", () => {
     if (state.route.length < 2) {
       toast("Nothing to fit", "Add at least two waypoints first.", { kind: "warn" });
@@ -603,10 +712,10 @@ export function initMapStudio() {
     if (event.key === "Enter") runSearch().catch(() => {});
   });
 
-  $("toggle-route-edit").addEventListener("change", (event) => {
-    setState({ routeEditing: event.target.checked });
-    setMapMode();
-  });
+  $("toggle-route-edit").addEventListener("change", (event) => setEditing(event.target.checked));
+  for (const id of ["btn-edit-route-map", "btn-edit-route-preview"]) {
+    $(id).addEventListener("click", () => setEditing(!state.routeEditing));
+  }
 
   $("input-speed").addEventListener("change", () => {
     const value = Number($("input-speed").value);
@@ -651,8 +760,14 @@ export function initMapStudio() {
       hint: "Saved routes are not affected.",
     });
     if (!ok) return;
-    setState({ route: [] });
+    setState({ route: [], selectedWaypoint: -1 });
     persistWorkspace();
+  });
+
+  // Appending the destination is the keyboard-reachable alternative to clicking a map;
+  // the button sits beside the waypoint list, but the waypoint state is owned here.
+  $("btn-add-waypoint").addEventListener("click", () => {
+    addWaypoint(state.target.lat, state.target.lon, state.target.altitude);
   });
 
   applyTarget(state.target.lat, state.target.lon, {
@@ -675,6 +790,4 @@ export function initMapStudio() {
     setMapMode();
     scheduleMetrics();
   });
-
-  window.addEventListener("resize", () => studioMap.map.invalidateSize());
 }

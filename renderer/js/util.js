@@ -137,6 +137,33 @@ export function waypointIndexAtDistance(points, distance) {
   return Math.max(0, points.length - 1);
 }
 
+/* -------------------------------------------------------- waypoint editing */
+
+/**
+ * The list operations a route editor has to get right, kept DOM-free so the order they
+ * produce can be tested without a map. Each one returns a new array: the store and the
+ * render signatures compare by value, and an in-place mutation would let a dragged or
+ * reordered waypoint look unchanged to everything downstream.
+ */
+export function withWaypointMoved(route, index, lat, lon) {
+  if (index < 0 || index >= route.length) return route;
+  return route.map((point, position) => (position === index ? { ...point, lat, lon } : point));
+}
+
+export function withWaypointRemoved(route, index) {
+  if (index < 0 || index >= route.length) return route;
+  return route.filter((_, position) => position !== index);
+}
+
+/** Swap a waypoint with its neighbour; stepping off either end leaves the route alone. */
+export function withWaypointReordered(route, index, direction) {
+  const target = index + direction;
+  if (target < 0 || target >= route.length) return route;
+  const next = [...route];
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+
 /* ---------------------------------------------------------- validation */
 
 export function validateLatitude(value) {

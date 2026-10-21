@@ -10,6 +10,7 @@ observe, and it always tries to release the phone.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import sys
 import time
 import unittest
@@ -24,6 +25,13 @@ from location_studio_bridge.simulation import (  # noqa: E402
     SimulationService,
     SimulationState,
 )
+from location_studio_bridge.wireless import (  # noqa: E402
+    TRANSPORT_RSD_LAN,
+    TRANSPORT_WIFI_MUX,
+    Endpoint,
+)
+
+HAS_PYMOBILEDEVICE3 = importlib.util.find_spec("pymobiledevice3") is not None
 
 UDID = "00008140-0000000000000000"
 PARIS = {"lat": 48.8557, "lon": 2.2981}
@@ -82,11 +90,15 @@ class SimulationTestCase(unittest.IsolatedAsyncioTestCase):
 
     def _build_service(self) -> SimulationService:
         service = SimulationService(tunnels=mock.Mock(), emit=self._emit)
+        self.identity_calls: list[tuple[str, str | None]] = []
+        self.built_with: list[tuple[str, object]] = []
 
-        async def read_identity(device_id: str) -> dict:
+        async def read_identity(device_id: str, connection_type: str | None = None) -> dict:
+            self.identity_calls.append((device_id, connection_type))
             return {"deviceName": "Test iPhone", "productVersion": "27.0.1", "developerModeEnabled": True}
 
-        async def build_target(device_id: str, identity: dict) -> FakeTarget:
+        async def build_target(device_id: str, identity: dict, endpoint: object = None) -> FakeTarget:
+            self.built_with.append((device_id, endpoint))
             await self.target.open()
             return self.target
 
@@ -373,6 +385,77 @@ class TestTransportHonesty(unittest.TestCase):
         asyncio.run(target.clear())
         asyncio.run(target.close())
         self.assertIsNone(target._simulation)  # noqa: SLF001
+
+
+class TestMediumPinning(SimulationTestCase):
+    """A session must remember, and be built on, the transport it was asked for.
+
+    usbmuxd answers from the cable whenever both entries exist, so a wireless session
+    that does not pin its medium is really a USB session wearing a wireless label.
+    """
+
+    async def test_a_wireless_endpoint_is_threaded_into_every_device_call(self) -> None:
+        endpoint = Endpoint(UDID, TRANSPORT_WIFI_MUX)
+        snapshot = await self.service.start_fixed(UDID, PARIS, endpoint=endpoint)
+
+        self.assertEqual(self.identity_calls, [(UDID, "Network")])
+        self.assertEqual(self.built_with, [(UDID, endpoint)])
+        self.assertEqual(snapshot["link"]["transport"], TRANSPORT_WIFI_MUX)
+        self.assertTrue(snapshot["link"]["wireless"])
+
+    async def test_a_session_built_without_an_endpoint_claims_no_medium(self) -> None:
+        snapshot = await self.service.start_fixed(UDID, PARIS)
+
+        # Nothing pinned: lockdown is reached through whatever usbmuxd prefers, which is
+        # reported as unknown rather than guessed to be the cable.
+        self.assertEqual(self.identity_calls, [(UDID, None)])
+        self.assertIsNone(snapshot["link"]["transport"])
+        self.assertFalse(snapshot["link"]["wireless"])
+
+    async def test_a_direct_lan_session_skips_the_usb_watchdog(self) -> None:
+        await self.service.start_fixed(
+            UDID, PARIS, endpoint=Endpoint(UDID, TRANSPORT_RSD_LAN, host="192.0.2.9")
+        )
+        session = self.service._session  # noqa: SLF001
+        self.assertIsNotNone(session)
+        # The mux scan that a cable removal would show up in has no entry for a phone that
+        # was reached directly over the LAN, so watching it would only produce false alarms.
+        self.assertIsNone(session._watchdog)  # noqa: SLF001
+        self.assertEqual(session.link["transport"], TRANSPORT_RSD_LAN)
+        await self.service.stop()
+
+
+@unittest.skipUnless(HAS_PYMOBILEDEVICE3, "pymobiledevice3 is not installed for this interpreter")
+class TestLegacyMediumPinning(unittest.IsolatedAsyncioTestCase):
+    async def test_a_wireless_legacy_session_pins_lockdown_to_the_network_entry(self) -> None:
+        import pymobiledevice3.lockdown as lockdown_module
+
+        seen: dict[str, object] = {}
+
+        class ProbeService:
+            async def close(self) -> None:
+                pass
+
+        class Client:
+            async def start_lockdown_developer_service(self, name: str) -> ProbeService:
+                seen["service"] = name
+                return ProbeService()
+
+            async def close(self) -> None:
+                pass
+
+        async def create_using_usbmux(**kwargs):
+            seen.update(kwargs)
+            return Client()
+
+        with mock.patch.object(lockdown_module, "create_using_usbmux", create_using_usbmux):
+            target = LegacyLocationTarget(UDID, "Network")
+            await target.open()
+
+        self.assertEqual(seen["serial"], UDID)
+        self.assertEqual(seen["connection_type"], "Network")
+        # The legacy service never confirms a write, on any medium.
+        self.assertFalse(target.acknowledged)
 
 
 if __name__ == "__main__":

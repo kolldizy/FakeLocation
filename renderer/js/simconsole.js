@@ -171,7 +171,7 @@ function updateStartButtons() {
 
   const hint = $("console-start-hint");
   if (!hasDevice) {
-    hint.textContent = "Select an iPhone in Device Center first. Nothing is sent to a device you have not chosen.";
+    hint.textContent = "Select an iPhone in the Device workspace first. Nothing is sent to a device you have not chosen.";
     hint.className = "hint";
   } else if (blocked) {
     hint.textContent = `Blocked: ${state.readiness.summary}`;
@@ -247,7 +247,7 @@ async function startRoute() {
   const deviceId = state.selectedDeviceId;
   if (!deviceId) return;
   if (state.route.length < 2) {
-    toast("Route too short", "Add at least two waypoints in Map Studio.", { kind: "warn" });
+    toast("Route too short", "Add at least two waypoints in the Routes workspace.", { kind: "warn" });
     return;
   }
   const points = state.route.map((point) => ({
@@ -353,7 +353,7 @@ async function refreshState({ silent = false } = {}) {
 async function captureScreenshot() {
   const deviceId = state.selectedDeviceId;
   if (!deviceId) {
-    toast("No device selected", "Select an iPhone in Device Center first.", { kind: "warn" });
+    toast("No device selected", "Select an iPhone in the Device workspace first.", { kind: "warn" });
     return;
   }
   const host = $("screenshot-host");

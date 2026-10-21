@@ -13,6 +13,10 @@ release/
 # so they stay on the machine that produced them.
 docs/reports/
 
+# Local scratch: capture output, ad-hoc probes, smoke JSON. Machine paths and
+# device identifiers live here, so nothing in it is ever staged.
+tmp/
+
 # Logs and OS clutter
 *.log
 Thumbs.db

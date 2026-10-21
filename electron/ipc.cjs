@@ -24,13 +24,13 @@ const {
   asNumber,
   asBoolean,
   validateDeviceId,
+  validateTransport,
   validateCoordinate,
   validatePoints,
   validateOptions,
   safeFileName,
   toBridgeError,
 } = require("./validation.cjs");
-
 /**
  * Wraps a handler so every failure reaches the renderer in the same shape as a
  * bridge error, instead of surfacing as an unhandled IPC rejection.
@@ -57,6 +57,7 @@ function registerIpc({ ipcMain, bridge, store, getWindow, electron }) {
     chrome: process.versions.chrome,
     node: process.versions.node,
     platform: process.platform,
+    arch: process.arch,
     workspaceFile: store.filePath,
     bridgeStatus: bridge.status,
   }));
@@ -91,6 +92,7 @@ function registerIpc({ ipcMain, bridge, store, getWindow, electron }) {
     const request = {};
     if (params.deviceId) request.deviceId = validateDeviceId(params);
     if (params.deep !== undefined) request.deep = asBoolean(params.deep, "deep");
+    if (params.transport !== undefined) request.transport = validateTransport(params.transport);
     return bridge.request("devices.capabilities", request);
   });
 
@@ -98,6 +100,7 @@ function registerIpc({ ipcMain, bridge, store, getWindow, electron }) {
     await bridge.ensureStarted();
     const request = { deviceId: validateDeviceId(params) };
     if (params.openTunnel !== undefined) request.openTunnel = asBoolean(params.openTunnel, "openTunnel");
+    if (params.transport !== undefined) request.transport = validateTransport(params.transport);
     return bridge.request("devices.readiness", request);
   });
 
@@ -108,6 +111,40 @@ function registerIpc({ ipcMain, bridge, store, getWindow, electron }) {
       request.timeoutSeconds = asNumber(params.timeoutSeconds, "timeoutSeconds", { min: 10, max: 180 });
     }
     return bridge.request("devices.pair", request);
+  });
+
+  // ---------------------------------------------------------------- wireless
+  // The renderer names a device and, at most, one of three transport ids. Discovery
+  // addresses, LAN hosts and ports are chosen by the bridge from what it just observed.
+
+  handle("wireless:probe", async (_event, params) => {
+    await bridge.ensureStarted();
+    const request = {};
+    if (params.deviceId !== undefined && params.deviceId !== null) request.deviceId = validateDeviceId(params);
+    if (params.probeIdentity !== undefined) request.probeIdentity = asBoolean(params.probeIdentity, "probeIdentity");
+    return bridge.request("wireless.probe", request);
+  });
+
+  handle("wireless:connect", async (_event, params) => {
+    await bridge.ensureStarted();
+    return bridge.request("wireless.connect", {
+      deviceId: validateDeviceId(params),
+      transport: validateTransport(params.transport),
+    });
+  });
+
+  handle("wireless:disconnect", async (_event, params) => {
+    await bridge.ensureStarted();
+    const request = {};
+    if (params.deviceId !== undefined && params.deviceId !== null) request.deviceId = validateDeviceId(params);
+    return bridge.request("wireless.disconnect", request);
+  });
+
+  handle("wireless:status", async (_event, params) => {
+    await bridge.ensureStarted();
+    const request = {};
+    if (params.deviceId !== undefined && params.deviceId !== null) request.deviceId = validateDeviceId(params);
+    return bridge.request("wireless.status", request);
   });
 
   // -------------------------------------------------------------- simulation
@@ -225,6 +262,7 @@ module.exports = {
   guard,
   safeFileName,
   validateDeviceId,
+  validateTransport,
   validateCoordinate,
   validatePoints,
   validateOptions,

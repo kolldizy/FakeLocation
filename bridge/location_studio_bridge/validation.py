@@ -80,6 +80,22 @@ def validate_udid(value: Any) -> str:
     return udid
 
 
+#: The transports a caller may choose. This is an allowlist rather than a free-form
+#: value on purpose: the renderer can never name a host, a port, a path or a command -
+#: addresses are discovered by the bridge and referenced only by one of these ids.
+TRANSPORTS = ("usb", "wifi-mux", "rsd-lan")
+
+
+def validate_transport(value: Any, name: str = "transport") -> str:
+    transport = require_string(value, name, max_length=16)
+    if transport not in TRANSPORTS:
+        raise ValidationError(
+            f"'{name}' must be one of: {', '.join(TRANSPORTS)}.",
+            "Addresses are resolved by the bridge; the caller only selects a transport.",
+        )
+    return transport
+
+
 def validate_latitude(value: Any, name: str = "latitude") -> float:
     return require_number(value, name, minimum=-MAX_LATITUDE, maximum=MAX_LATITUDE)
 

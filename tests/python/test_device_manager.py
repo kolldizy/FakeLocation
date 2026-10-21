@@ -15,6 +15,7 @@ import unittest
 from unittest import mock
 
 from location_studio_bridge.device_manager import DeviceManager
+from location_studio_bridge.wireless import TRANSPORT_USB, TRANSPORT_WIFI_MUX
 
 HAS_PYMOBILEDEVICE3 = importlib.util.find_spec("pymobiledevice3") is not None
 
@@ -29,6 +30,7 @@ def scan_entry(udid: str = UDID) -> dict:
         "udid": udid,
         "connectionType": "USB",
         "isUsb": True,
+        "isNetwork": False,
         "identity": None,
         "stages": {
             "usbDetected": True,
@@ -37,27 +39,47 @@ def scan_entry(udid: str = UDID) -> dict:
             "developerModeEnabled": None,
             "developerServiceAvailable": None,
             "simulationReady": None,
+            "wirelessReachable": None,
+            "tunnelOverWireless": None,
         },
         "issues": [],
     }
 
 
 class FakeTunnels:
+    """Stands in for TunnelManager, recording the endpoint each acquire was pinned to."""
+
     def __init__(self, port=54321, error=None) -> None:
         self.port = port
         self.error = error
         self.acquired: list[str] = []
+        self.endpoints: list[object] = []
+        self.open_for = None
+        self.endpoint = None
 
-    async def acquire(self, udid: str):
+    async def acquire(self, udid: str, *, endpoint=None):
         self.acquired.append(udid)
+        self.endpoints.append(endpoint)
         if self.error is not None:
             raise self.error
+        self.open_for = udid
+        self.endpoint = endpoint
         return self
 
     def get_service_port(self, name: str):
         if self.port is None:
             raise KeyError(name)
         return self.port
+
+    def status(self) -> dict:
+        return {
+            "open": self.open_for is not None,
+            "deviceId": self.open_for,
+            "establishedCount": len(self.acquired),
+            "kind": "userspace",
+            "transport": getattr(self.endpoint, "transport", None),
+            "wireless": bool(getattr(self.endpoint, "is_wireless", False)),
+        }
 
 
 class FakeLockdownClient:
@@ -246,6 +268,140 @@ class TestReadinessFoldsMeasuredStages(unittest.IsolatedAsyncioTestCase):
         # Lockdown was not opened, so those stages stay unknown rather than guessed.
         self.assertIsNone(stages["paired"])
         self.assertIsNone(stages["developerModeEnabled"])
+
+
+@unittest.skipUnless(HAS_PYMOBILEDEVICE3, "pymobiledevice3 is not installed for this interpreter")
+class TestScanReportsTheMedium(unittest.IsolatedAsyncioTestCase):
+    """A usbmuxd entry proves that a link exists *and which kind*.
+
+    Getting the kind wrong is how a phone that only ever appeared over the network ends
+    up with a check mark under "USB" - and how a wireless handshake gets attributed to a
+    cable that was not plugged in.
+    """
+
+    async def _scan(self, *devices, probe_identity: bool) -> tuple[DeviceManager, dict]:
+        manager = DeviceManager(FakeTunnels())
+        manager._usbmux_state = mock.AsyncMock(
+            return_value={"available": True, "address": "127.0.0.1:27015", "deviceCount": len(devices)}
+        )
+        with fake_pymobiledevice3(devices=list(devices)):
+            result = await manager.discover(probe_identity=probe_identity)
+        by_type = {entry["connectionType"]: entry for entry in result["devices"]}
+        return manager, by_type
+
+    async def test_a_network_entry_is_not_claimed_as_a_cable(self) -> None:
+        _, entries = await self._scan(FakeMuxDevice(UDID, "Network"), probe_identity=False)
+        entry = entries["Network"]
+        self.assertIs(entry["stages"]["usbDetected"], False)
+        # No lockdown session ran, so the Wi-Fi path is listed as an entry, not a reach.
+        self.assertIsNone(entry["stages"]["wirelessReachable"])
+
+    async def test_a_cable_entry_still_claims_the_cable(self) -> None:
+        _, entries = await self._scan(FakeMuxDevice(UDID, "USB"), probe_identity=False)
+        self.assertIs(entries["USB"]["stages"]["usbDetected"], True)
+        self.assertIsNone(entries["USB"]["stages"]["wirelessReachable"])
+
+    async def test_a_handshake_over_the_network_entry_is_a_wireless_measurement(self) -> None:
+        manager, entries = await self._scan(FakeMuxDevice(UDID, "Network"), probe_identity=True)
+        entry = entries["Network"]
+        self.assertIs(entry["stages"]["usbDetected"], False)
+        self.assertIs(entry["stages"]["wirelessReachable"], True)
+        self.assertIsNone(entry["stages"]["tunnelOverWireless"])
+        self.assertEqual(entry["link"]["proven"]["transports"], [TRANSPORT_WIFI_MUX])
+        # Observing a medium is not choosing it: nothing may redirect later commands.
+        self.assertIsNone(entry["link"]["selected"])
+        self.assertIsNone(manager.selected_endpoint(UDID))
+        self.assertTrue(entry["transport"]["wireless"])
+        self.assertEqual(entry["transport"]["observedOver"], "Network")
+
+    async def test_a_cable_handshake_is_never_counted_as_wireless_evidence(self) -> None:
+        _, entries = await self._scan(FakeMuxDevice(UDID, "USB"), probe_identity=True)
+        entry = entries["USB"]
+        self.assertIs(entry["stages"]["usbDetected"], True)
+        self.assertIsNone(entry["stages"]["wirelessReachable"])
+        self.assertEqual(entry["link"]["proven"]["transports"], [TRANSPORT_USB])
+        self.assertFalse(entry["transport"]["wireless"])
+
+    async def test_two_entries_for_one_phone_stay_two_observations(self) -> None:
+        manager, entries = await self._scan(
+            FakeMuxDevice(UDID, "USB"), FakeMuxDevice(UDID, "Network"), probe_identity=True
+        )
+        self.assertIs(entries["USB"]["stages"]["usbDetected"], True)
+        self.assertIs(entries["Network"]["stages"]["usbDetected"], False)
+        self.assertEqual(manager._proven[UDID]["transports"], sorted([TRANSPORT_USB, TRANSPORT_WIFI_MUX]))
+        # With both media present the cable wins, exactly as usbmuxd itself prefers.
+        self.assertEqual(manager.default_endpoint(UDID, ["USB", "Network"]).transport, TRANSPORT_USB)
+
+
+@unittest.skipUnless(HAS_PYMOBILEDEVICE3, "pymobiledevice3 is not installed for this interpreter")
+class TestReadinessWordingIsReadableAndIdentifierFree(unittest.IsolatedAsyncioTestCase):
+    """Readiness details are painted in the app, so they have to read as measured facts.
+
+    Two failures were both real and both wrong on screen: a device that left usbmuxd
+    mid-check was described as "listed as nothing but not as USB", and every variant
+    carried the full UDID into text the user sees and screenshots keep.
+    """
+
+    async def _readiness(self, devices, **kwargs):
+        manager = DeviceManager(FakeTunnels())
+        manager._usbmux_state = mock.AsyncMock(
+            return_value={"available": True, "address": "127.0.0.1:27015"}
+        )
+        with fake_pymobiledevice3(devices=devices):
+            return await manager.check_readiness(UDID, open_tunnel=False, **kwargs)
+
+    @staticmethod
+    def _presence(report):
+        return next(check for check in report["checks"] if check["id"] == "device_present")
+
+    @staticmethod
+    def _painted_text(report):
+        parts = [report["summary"] or ""]
+        for check in report["checks"]:
+            parts.extend(str(value or "") for value in (check["label"], check["detail"], check["remedy"]))
+        return "\n".join(parts)
+
+    async def test_a_cable_entry_is_named_as_a_cable(self) -> None:
+        report = await self._readiness([FakeMuxDevice(UDID, "USB")])
+
+        check = self._presence(report)
+        self.assertTrue(check["ok"])
+        self.assertIn("connection type USB", check["detail"])
+
+    async def test_an_entry_on_the_other_medium_names_that_medium_instead_of_nothing(self) -> None:
+        # Only a cable entry exists while the session is pinned to Wi-Fi: the check has
+        # to say which medium it actually found, not that the phone is "listed as nothing".
+        report = await self._readiness([FakeMuxDevice(UDID, "USB")], transport=TRANSPORT_WIFI_MUX)
+
+        check = self._presence(report)
+        self.assertFalse(check["ok"])
+        self.assertIn("only as USB", check["detail"])
+        self.assertIn("not as Network", check["detail"])
+        self.assertNotIn("nothing", check["detail"])
+
+    async def test_a_device_that_vanished_is_reported_as_vanished(self) -> None:
+        report = await self._readiness([])
+
+        check = self._presence(report)
+        self.assertFalse(check["ok"])
+        self.assertIn("no longer lists", check["detail"])
+        self.assertEqual(check["remedy"], "Reconnect the cable, then refresh.")
+
+    async def test_painted_readiness_text_never_carries_a_full_udid(self) -> None:
+        cases = (
+            ([FakeMuxDevice(UDID, "USB")], {}),
+            ([FakeMuxDevice(UDID, "Network")], {}),
+            ([FakeMuxDevice(UDID, "USB")], {"transport": TRANSPORT_WIFI_MUX}),
+            ([], {}),
+        )
+        for devices, kwargs in cases:
+            report = await self._readiness(devices, **kwargs)
+
+            text = self._painted_text(report)
+            self.assertNotIn(UDID, text)
+            self.assertIn("iPhone ending", text)
+            # The machine-readable field that ties the report to a device stays intact.
+            self.assertEqual(report["deviceId"], UDID)
 
 
 if __name__ == "__main__":

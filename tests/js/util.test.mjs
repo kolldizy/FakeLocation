@@ -24,6 +24,9 @@ import {
   validateLatitude,
   validateLongitude,
   waypointIndexAtDistance,
+  withWaypointMoved,
+  withWaypointRemoved,
+  withWaypointReordered,
 } from "../../renderer/js/util.js";
 
 test("haversineM matches known distances within a sensible tolerance", () => {
@@ -109,6 +112,86 @@ test("waypointIndexAtDistance walks the route monotonically", () => {
     assert.ok(index >= previous, "walking forward must not go backwards");
     previous = index;
   }
+});
+
+/* ------------------------------------------------------------ waypoint editing */
+
+const sampleRoute = () => [
+  { lat: 47.0, lon: 28.0 },
+  { lat: 47.001, lon: 28.0, altitude: 20 },
+  { lat: 47.002, lon: 28.001 },
+  { lat: 47.003, lon: 28.002 },
+];
+
+test("moving a waypoint rewrites only that point and keeps its metadata and order", () => {
+  const route = sampleRoute();
+  const moved = withWaypointMoved(route, 1, 47.05, 28.5);
+
+  assert.notEqual(moved, route, "a mutated array in place would never re-render");
+  assert.deepEqual(moved[1], { lat: 47.05, lon: 28.5, altitude: 20 });
+  assert.deepEqual(moved[0], route[0]);
+  assert.deepEqual(moved[2], route[2]);
+  assert.deepEqual(route[1], { lat: 47.001, lon: 28.0, altitude: 20 }, "the input list must not be touched");
+  assert.equal(moved.length, route.length);
+
+  // Out of range and empty routes are refused rather than shifted into place.
+  assert.equal(withWaypointMoved(route, 9, 1, 1), route);
+  assert.equal(withWaypointMoved(route, -1, 1, 1), route);
+  assert.equal(withWaypointMoved([], 0, 1, 1).length, 0);
+});
+
+test("removing a waypoint leaves the survivors in route order", () => {
+  const route = sampleRoute();
+  const withoutSecond = withWaypointRemoved(route, 1);
+
+  assert.deepEqual(withoutSecond.map((point) => point.lat), [47.0, 47.002, 47.003]);
+  assert.equal(withoutSecond.length, 3);
+  assert.equal(route.length, 4, "the original list is not mutated");
+
+  assert.equal(withWaypointRemoved(route, 9), route);
+  assert.equal(withWaypointRemoved(route, -1), route);
+  assert.equal(withWaypointRemoved([], 0).length, 0);
+
+  // The route maths follows the removal, so distance and ETA cannot disagree with the list.
+  assert.ok(routeLengthM(withoutSecond) < routeLengthM(route));
+});
+
+test("reordering swaps neighbours and refuses to step off either end", () => {
+  const route = sampleRoute();
+  const earlier = withWaypointReordered(route, 2, -1);
+  assert.deepEqual(earlier.map((point) => point.lat), [47.0, 47.002, 47.001, 47.003]);
+  assert.deepEqual(route, sampleRoute(), "the input list must not be touched");
+
+  const later = withWaypointReordered(earlier, 1, 1);
+  assert.deepEqual(later.map((point) => point.lat), [47.0, 47.001, 47.002, 47.003], "a swap is its own inverse");
+
+  // The first waypoint cannot move earlier and the last cannot move later; the buttons
+  // are disabled for exactly this reason, and the list must not silently reorder anyway.
+  assert.equal(withWaypointReordered(route, 0, -1), route);
+  assert.equal(withWaypointReordered(route, route.length - 1, 1), route);
+  assert.equal(withWaypointReordered([], 0, 1).length, 0);
+});
+
+test("a route shorter than two waypoints has no geometry to draw or play", () => {
+  // This is the empty-route case the preview map used to paper over with invented points.
+  const none = [];
+  const first = { lat: 47.0105, lon: 28.8638 };
+  const one = [first];
+  // Two waypoints are the first real route: one leg, and a path that can be played.
+  const two = [first, { lat: 47.0115, lon: 28.8638 }];
+
+  assert.equal(routeLengthM(none), 0);
+  assert.equal(routeLengthM(one), 0);
+  assert.equal(routeLengthM(two) > 0, true);
+
+  // A single waypoint starts the tally at zero and adds no leg; two give exactly one leg.
+  assert.deepEqual(cumulativeLengths(one), [0]);
+  assert.deepEqual(cumulativeLengths(two), [0, routeLengthM(two)]);
+
+  assert.deepEqual(densify(one, 3), one, "a single waypoint must not gain companions");
+  assert.deepEqual(buildPlaybackPoints(one, { speedMps: 8, updateRateHz: 5 }), one);
+  assert.equal(waypointIndexAtDistance(one, 0), 0);
+  assert.ok(buildPlaybackPoints(two, { speedMps: 8, updateRateHz: 5 }).length > 2);
 });
 
 test("coordinate parsing and validation separate numbers from everything else", () => {

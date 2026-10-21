@@ -8,6 +8,7 @@
  */
 
 const { app, BrowserWindow, ipcMain, Menu, protocol, shell } = require("electron");
+const fs = require("node:fs");
 const path = require("node:path");
 
 const { BridgeClient } = require("./bridge-client.cjs");
@@ -43,10 +44,42 @@ const logLines = [];
 // same log stream as a development run (useful when reporting a problem).
 const verboseLogging = isDevelopment || process.env.LOCATION_STUDIO_VERBOSE === "1";
 
+/**
+ * Log file, because the in-memory buffer dies with the process it describes.
+ *
+ * A start that fails before a window exists is otherwise invisible: nothing is
+ * painted, nothing is printed to a console the user never opened, and the exit code
+ * is 0. This file is the only evidence such a run leaves behind.
+ */
+const LOG_FILE = (() => {
+  try {
+    const dir = app.getPath("logs");
+    fs.mkdirSync(dir, { recursive: true });
+    return path.join(dir, "location-studio.log");
+  } catch {
+    return null;
+  }
+})();
+
+function appendLogLine(line) {
+  if (!LOG_FILE) return;
+  try {
+    fs.appendFileSync(LOG_FILE, `${line}\n`);
+    // A tail, not an unbounded record of every run this machine ever had.
+    if (fs.statSync(LOG_FILE).size > 512 * 1024) {
+      const tail = fs.readFileSync(LOG_FILE, "utf8").split("\n").slice(-600).join("\n");
+      fs.writeFileSync(LOG_FILE, `${tail}\n`);
+    }
+  } catch {
+    /* logging must never be the reason the app fails to start */
+  }
+}
+
 function log(level, message) {
   const line = `${new Date().toISOString()} [${level}] ${message}`;
   logLines.push(line);
   if (logLines.length > 400) logLines.shift();
+  appendLogLine(line);
   if (level === "error" || verboseLogging) {
     process.stderr.write(line + "\n");
   }
@@ -78,9 +111,12 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1560,
     height: 980,
-    minWidth: 1180,
-    minHeight: 720,
-    backgroundColor: "#070a10",
+    // 1280x720 laptops are the floor this design is measured against. The minimum is
+    // below the 720 CSS breakpoint on purpose: a 720-tall window cannot exist on a
+    // 720-tall screen once the taskbar is counted, so the layout has to survive shorter.
+    minWidth: 1100,
+    minHeight: 640,
+    backgroundColor: "#090A0C",
     show: false,
     title: "Location Studio — Cyber Motion",
     autoHideMenuBar: true,
@@ -195,13 +231,23 @@ function buildMenu() {
 
 // Single instance: two bridges fighting over one iPhone would be confusing.
 if (!app.requestSingleInstanceLock()) {
+  log("warn", "start refused: another instance owns this profile, so no window was created");
   app.quit();
 } else {
+  log("info", `start: ${app.isPackaged ? "packaged" : "development"} build, Electron ${process.versions.electron}`);
   app.on("second-instance", () => {
-    if (mainWindow) {
+    // A launch has to be *seen*. Focusing a window that no longer exists is what made
+    // a wedged instance look like "the app does not start": the icon was clicked, the
+    // second process exited quietly and nothing ever appeared.
+    if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
       mainWindow.focus();
+      return;
     }
+    log("warn", "second launch found no live window — creating one");
+    if (app.isReady()) createWindow();
+    else app.whenReady().then(createWindow);
   });
 
   app.whenReady().then(() => {
@@ -229,10 +275,20 @@ app.on("before-quit", (event) => {
   if (shuttingDown) return;
   shuttingDown = true;
   event.preventDefault();
+  // The graceful path waits on the bridge, and a promise that never settles would keep
+  // this process alive with no window — holding the single-instance lock so every later
+  // launch quits quietly. The watchdog is what makes that state unreachable.
+  const watchdog = setTimeout(() => {
+    log("error", "bridge stop did not settle within 30s — forcing exit");
+    app.exit(1);
+  }, 30_000);
   bridge
     .stop()
     .catch((error) => log("warn", `bridge stop failed: ${error.message}`))
-    .finally(() => app.exit(0));
+    .finally(() => {
+      clearTimeout(watchdog);
+      app.exit(0);
+    });
 });
 
 process.on("uncaughtException", (error) => {

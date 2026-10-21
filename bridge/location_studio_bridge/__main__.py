@@ -247,6 +247,57 @@ async def cli_clear(args: argparse.Namespace) -> int:
         await server.close()
 
 
+async def cli_wireless(args: argparse.Namespace) -> int:
+    """Print what this PC can really reach an iPhone on. Used by the hardware acceptance run."""
+    from .server import BridgeServer
+
+    server = BridgeServer(emit=_emit_to_stderr, log=log_line)
+    params: dict[str, Any] = {}
+    if args.device:
+        params["deviceId"] = args.device
+    if not args.identity:
+        params["probeIdentity"] = False
+    if args.connect and not args.device:
+        log_line("--connect needs --device <udid> as well")
+        return 2
+    try:
+        report = await server._wireless_probe(params)
+        _print(
+            {
+                "verdict": report["verdict"],
+                "host": report["host"],
+                "transports": {
+                    key: {
+                        "available": value["available"],
+                        "deviceCount": value["deviceCount"],
+                        "note": value["note"],
+                        **({"error": value["error"]} if value.get("error") else {}),
+                    }
+                    for key, value in report["transports"].items()
+                },
+                "candidates": [
+                    {
+                        "deviceId": item["deviceId"],
+                        "seenOn": item["seenOn"],
+                        "reachableOver": item["reachableOver"],
+                        "ios": (item.get("identity") or {}).get("productVersion"),
+                        "developerMode": (item.get("identity") or {}).get("developerModeEnabled"),
+                        "capability": item["capability"],
+                        "tunnel": item["tunnel"],
+                        "failedProbes": [probe for probe in item["probes"] if probe["ok"] is not True],
+                    }
+                    for item in report["candidates"]
+                ],
+                "issues": report["issues"],
+            }
+        )
+        if args.connect:
+            _print(await server.devices.connect_transport(args.device, args.connect))
+        return 0
+    finally:
+        await server.close()
+
+
 async def cli_selfcheck(_args: argparse.Namespace) -> int:
     from . import geo
     from .gpx import build_gpx, parse_gpx
@@ -324,6 +375,16 @@ def build_parser() -> argparse.ArgumentParser:
     clear = sub.add_parser("clear", help="stop simulation and restore real GPS")
     clear.add_argument("device", nargs="?", default=None, help="device UDID (optional)")
     clear.set_defaults(func=cli_clear)
+
+    wireless = sub.add_parser("wireless", help="probe which transports can reach an iPhone")
+    wireless.add_argument("--device", default=None, help="limit the identity proof to one UDID")
+    wireless.add_argument(
+        "--identity",
+        action="store_true",
+        help="open lockdown on each network entry to prove the Wi-Fi handshake",
+    )
+    wireless.add_argument("--connect", default=None, help="after probing, connect this transport (usb|wifi-mux|rsd-lan)")
+    wireless.set_defaults(func=cli_wireless)
 
     return parser
 

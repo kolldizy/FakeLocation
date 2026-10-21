@@ -47,13 +47,87 @@ function makeTileLayer(style) {
   return { layer, labels, config };
 }
 
+/**
+ * Leaflet measures its container only when it is told to. Both maps are built while
+ * their workspace is `display: none` and then live in a shell that changes size with
+ * the window, the dock scrollbar and the basemap switch, so a single `invalidateSize()`
+ * on view entry leaves a map painting tiles into the box it had at boot. Watching the
+ * container covers reveal, resize and reflow with one mechanism.
+ */
+function watchSize(map, container) {
+  const measure = () => map.invalidateSize({ animate: false });
+  new ResizeObserver(measure).observe(container);
+  measure();
+}
+
 export const icons = {
   target: L.divIcon({ className: "", html: '<div class="pin-target"></div>', iconSize: [20, 20], iconAnchor: [10, 10] }),
-  waypoint: (armed = false) =>
-    L.divIcon({ className: "", html: `<div class="pin-waypoint${armed ? " armed" : ""}"></div>`, iconSize: [15, 15], iconAnchor: [7.5, 7.5] }),
+  /**
+   * Waypoints are numbered because the list, the polyline and the phone all order them,
+   * and a ring of identical dots cannot show which is which. The number is the index the
+   * drag and click callbacks report back, so a marker that lies about its order is a bug
+   * the user can see.
+   */
+  waypoint: (index, selected = false) =>
+    L.divIcon({
+      className: "",
+      html: `<div class="pin-waypoint${selected ? " selected" : ""}"><span>${index + 1}</span></div>`,
+      iconSize: [24, 24],
+      iconAnchor: [12, 12],
+    }),
   device: L.divIcon({ className: "", html: '<div class="pin-device"></div>', iconSize: [22, 22], iconAnchor: [11, 11] }),
   preview: L.divIcon({ className: "", html: '<div class="pin-preview"></div>', iconSize: [17, 17], iconAnchor: [8.5, 8.5] }),
 };
+
+/**
+ * Draw the route on one map: one numbered marker per waypoint, in order, plus a polyline
+ * that visits them in that order.
+ *
+ * Both maps share this so the editing surface and the preview cannot disagree about what
+ * the route is. A route with fewer than two waypoints draws no line at all — an empty
+ * plan must look empty.
+ */
+function drawRoute(owner, points, selected) {
+  for (const marker of owner.waypointMarkers) owner.map.removeLayer(marker);
+  owner.waypointMarkers = [];
+  if (owner.routeLine) {
+    owner.map.removeLayer(owner.routeLine);
+    owner.routeLine = null;
+  }
+
+  points.forEach((point, index) => {
+    const marker = L.marker([point.lat, point.lon], {
+      icon: icons.waypoint(index, index === selected),
+      draggable: true,
+      keyboard: false,
+      zIndexOffset: index === selected ? 900 : 100 + index,
+    })
+      .bindTooltip(`Waypoint ${index + 1} — drag to move, click to select`, { direction: "top", offset: [0, -12] })
+      .addTo(owner.map);
+    // Markers do not bubble clicks to the map, so selecting one never appends another.
+    marker.on("click", () => {
+      if (owner.onWaypointSelect) owner.onWaypointSelect(index);
+    });
+    marker.on("dragend", () => {
+      const position = marker.getLatLng();
+      if (owner.onWaypointDrag) owner.onWaypointDrag(index, position.lat, position.lng);
+    });
+    owner.waypointMarkers.push(marker);
+  });
+
+  if (points.length > 1) {
+    owner.routeLine = L.polyline(
+      points.map((point) => [point.lat, point.lon]),
+      { color: "#7db4ff", weight: 3, opacity: 0.9, dashArray: "8 7", className: "route-line" }
+    ).addTo(owner.map);
+  }
+}
+
+/** Crosshair over the canvas while a click means "append", pan while it means "move the map". */
+function setEditStyle(owner, editing) {
+  const container = owner.map && owner.map.getContainer();
+  if (container) container.classList.toggle("route-editing", Boolean(editing));
+}
 
 export const studioMap = {
   map: null,
@@ -66,6 +140,8 @@ export const studioMap = {
   waypointMarkers: [],
   onTargetChange: null,
   onMapClick: null,
+  onWaypointDrag: null,
+  onWaypointSelect: null,
 
   init(containerId, initial) {
     this.map = L.map(containerId, { zoomControl: false, attributionControl: true, preferCanvas: true }).setView(
@@ -86,7 +162,12 @@ export const studioMap = {
       const centre = this.map.getCenter();
       setState({ settings: { ...state.settings, mapCenter: { lat: centre.lat, lon: centre.lng, zoom: this.map.getZoom() } } });
     });
+    watchSize(this.map, document.getElementById(containerId));
     return this.map;
+  },
+
+  invalidate() {
+    if (this.map) this.map.invalidateSize({ animate: false });
   },
 
   setTileStyle(style) {
@@ -126,27 +207,17 @@ export const studioMap = {
     }
   },
 
-  redrawRoute(points, armedIndex = -1) {
-    for (const marker of this.waypointMarkers) this.map.removeLayer(marker);
-    this.waypointMarkers = [];
+  redrawRoute(points, selected = -1) {
+    drawRoute(this, points, selected);
+  },
 
-    points.forEach((point, index) => {
-      const marker = L.marker([point.lat, point.lon], { icon: icons.waypoint(index === armedIndex), keyboard: false })
-        .bindTooltip(`Waypoint ${index + 1}`, { direction: "top" })
-        .addTo(this.map);
-      this.waypointMarkers.push(marker);
-    });
+  setEditStyle(editing) {
+    setEditStyle(this, editing);
+  },
 
-    if (this.routeLine) {
-      this.map.removeLayer(this.routeLine);
-      this.routeLine = null;
-    }
-    if (points.length > 1) {
-      this.routeLine = L.polyline(
-        points.map((point) => [point.lat, point.lon]),
-        { color: "#5ff3ff", weight: 3, opacity: 0.9, dashArray: "8 7", className: "route-line" }
-      ).addTo(this.map);
-    }
+  focusWaypoint(point) {
+    if (!point) return;
+    this.map.setView([point.lat, point.lon], Math.max(this.map.getZoom(), 14));
   },
 
   fitRoute(points) {
@@ -160,44 +231,57 @@ export const previewMap = {
   map: null,
   tile: null,
   tileLabels: null,
+  tileStyle: "dark",
+  tileConfig: null,
   routeLine: null,
   trailLine: null,
   marker: null,
   waypointMarkers: [],
   trail: [],
+  onMapClick: null,
+  onWaypointDrag: null,
+  onWaypointSelect: null,
 
   init(containerId, initial) {
-    this.map = L.map(containerId, { zoomControl: true, attributionControl: true, preferCanvas: true }).setView(
+    this.map = L.map(containerId, { zoomControl: false, attributionControl: true, preferCanvas: true }).setView(
       [initial.lat, initial.lon],
       initial.zoom || 13
     );
-    const { layer, labels } = makeTileLayer("dark");
-    layer.addTo(this.map);
-    if (labels) labels.addTo(this.map);
-    this.tile = layer;
-    this.tileLabels = labels;
+    // Same corner as the studio map: the overlay chip that labels this surface as a
+    // preview lives top-left, and the default control position sat on top of its first word.
+    L.control.zoom({ position: "bottomright" }).addTo(this.map);
+    this.setTileStyle(this.tileStyle);
+    this.map.on("click", (event) => {
+      if (this.onMapClick) this.onMapClick(event.latlng.lat, event.latlng.lng);
+    });
+    watchSize(this.map, document.getElementById(containerId));
     return this.map;
   },
 
-  setRoute(points, options = {}) {
-    if (this.routeLine) this.map.removeLayer(this.routeLine);
-    this.routeLine = null;
-    for (const marker of this.waypointMarkers) this.map.removeLayer(marker);
-    this.waypointMarkers = [];
+  setTileStyle(style) {
+    this.tileStyle = style;
+    if (this.tile) this.map.removeLayer(this.tile);
+    if (this.tileLabels) this.map.removeLayer(this.tileLabels);
+    const { layer, labels, config } = makeTileLayer(style);
+    layer.addTo(this.map);
+    layer.bringToBack();
+    if (labels) labels.addTo(this.map);
+    this.tile = layer;
+    this.tileLabels = labels;
+    this.tileConfig = config;
+  },
 
-    if (points.length > 1) {
-      this.routeLine = L.polyline(
-        points.map((point) => [point.lat, point.lon]),
-        { color: "#a175ff", weight: options.highlighted ? 3 : 2, opacity: 0.75, dashArray: "5 8", className: "route-line" }
-      ).addTo(this.map);
-    }
-    points.forEach((point, index) => {
-      this.waypointMarkers.push(
-        L.marker([point.lat, point.lon], { icon: icons.waypoint(false), keyboard: false })
-          .bindTooltip(`Waypoint ${index + 1}`, { direction: "top" })
-          .addTo(this.map)
-      );
-    });
+  setRoute(points, options = {}) {
+    drawRoute(this, points, options.selected === undefined ? -1 : options.selected);
+  },
+
+  setEditStyle(editing) {
+    setEditStyle(this, editing);
+  },
+
+  focusWaypoint(point) {
+    if (!point) return;
+    this.map.setView([point.lat, point.lon], Math.max(this.map.getZoom(), 14));
   },
 
   setMarker(coordinate) {
@@ -224,7 +308,7 @@ export const previewMap = {
     if (this.trail.length > 4000) this.trail.splice(0, 1000);
     if (this.trail.length < 2) return;
     if (this.trailLine) this.map.removeLayer(this.trailLine);
-    this.trailLine = L.polyline(this.trail, { color: "#ff4fbd", weight: 2.5, opacity: 0.8, className: "route-line-second" }).addTo(this.map);
+    this.trailLine = L.polyline(this.trail, { color: "#c56fae", weight: 2.5, opacity: 0.85, className: "route-line-second" }).addTo(this.map);
   },
 
   clearTrail() {
@@ -247,6 +331,6 @@ export const previewMap = {
   },
 
   invalidate() {
-    if (this.map) this.map.invalidateSize();
+    if (this.map) this.map.invalidateSize({ animate: false });
   },
 };

@@ -70,6 +70,21 @@ function validateDeviceId(params) {
   return deviceId;
 }
 
+/**
+ * The transports a renderer may name. An allowlist rather than a free-form string:
+ * a caller can never supply a host, a port, a path or a command, only one of these
+ * ids. Addresses are discovered by the bridge and referenced indirectly.
+ */
+const TRANSPORTS = ["usb", "wifi-mux", "rsd-lan"];
+
+function validateTransport(value, name = "transport") {
+  const transport = asString(value, name, { max: 16 });
+  if (!TRANSPORTS.includes(transport)) {
+    throw new ValidationFailure(`'${name}' must be one of: ${TRANSPORTS.join(", ")}.`);
+  }
+  return transport;
+}
+
 function validateCoordinate(value, name = "coordinate") {
   if (!isPlainObject(value)) throw new ValidationFailure(`'${name}' must be an object with lat and lon.`);
   const coordinate = {
@@ -144,12 +159,14 @@ module.exports = {
   MAX_GPX_READ_BYTES,
   MAX_ROUTE_POINTS,
   DEVICE_ID_PATTERN,
+  TRANSPORTS,
   ValidationFailure,
   isPlainObject,
   asString,
   asNumber,
   asBoolean,
   validateDeviceId,
+  validateTransport,
   validateCoordinate,
   validatePoints,
   validateOptions,

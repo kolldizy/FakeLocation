@@ -4,15 +4,34 @@ import { $, clear, el, nowStamp } from "./util.js";
 
 const MAX_LINES = 400;
 
+/**
+ * One ring per log, kept beside the DOM rather than derived from it.
+ *
+ * The panels in the Device workspace render straight into their element, but the
+ * Overview wants the same tail without reading another view's markup. A shared buffer
+ * of what was actually written is the only copy that cannot disagree with the panel.
+ */
+const rings = new WeakMap();
+
 function appendTo(container, level, message, withStamp = true) {
   if (!container) return;
+  const at = nowStamp();
   const line = el("div", { className: `log-line ${level}` }, [
-    withStamp ? el("span", { className: "t", text: nowStamp() }) : null,
+    withStamp ? el("span", { className: "t", text: at }) : null,
     el("span", { className: "m", text: message }),
   ]);
   container.appendChild(line);
   while (container.childElementCount > MAX_LINES) container.removeChild(container.firstChild);
   container.scrollTop = container.scrollHeight;
+
+  const ring = rings.get(container) || [];
+  rings.set(container, ring);
+  ring.push({ level, text: message, at });
+  while (ring.length > MAX_LINES) ring.shift();
+}
+
+function recentOf(container, count) {
+  return (rings.get(container) || []).slice(-count);
 }
 
 export const consoleLog = {
@@ -20,7 +39,13 @@ export const consoleLog = {
     appendTo($("console-log"), level, message);
   },
   clear() {
-    clear($("console-log"));
+    const container = $("console-log");
+    const ring = rings.get(container);
+    if (ring) ring.length = 0;
+    clear(container);
+  },
+  recent(count) {
+    return recentOf($("console-log"), count);
   },
 };
 

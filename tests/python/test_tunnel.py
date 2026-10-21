@@ -58,7 +58,14 @@ class TestTunnelManager(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(manager.is_alive())
         self.assertEqual(
             manager.status(),
-            {"open": False, "deviceId": None, "establishedCount": 0, "kind": "userspace"},
+            {
+                "open": False,
+                "deviceId": None,
+                "establishedCount": 0,
+                "kind": "userspace",
+                "transport": None,
+                "wireless": False,
+            },
         )
 
     async def test_one_tunnel_is_reused_for_the_same_device(self) -> None:

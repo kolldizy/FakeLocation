@@ -38,6 +38,10 @@ const EXPECTED_CHANNELS = [
   "simulation:startRoute",
   "simulation:status",
   "simulation:stop",
+  "wireless:connect",
+  "wireless:disconnect",
+  "wireless:probe",
+  "wireless:status",
   "workspace:load",
   "workspace:reveal",
   "workspace:save",
@@ -166,6 +170,78 @@ test("pairing bounds the trust prompt timeout", async () => {
   const accepted = await harness.invoke("devices:pair", { deviceId: UDID, timeoutSeconds: 120 });
   assert.equal(accepted.ok, true);
   assert.deepEqual(harness.calls.at(-1), { method: "devices.pair", params: { deviceId: UDID, timeoutSeconds: 120 } });
+});
+
+test("wireless:connect only ever names a device and an allowlisted transport", async () => {
+  const harness = makeHarness();
+  const hostile = [
+    "192.0.2.7:62078",
+    "cmd.exe",
+    "powershell -Command Get-Process",
+    "/dev/tcp/10.0.0.1/27015",
+    "USB",
+    "",
+    "rsd-lan; rm -rf",
+    42,
+    null,
+    undefined,
+  ];
+  for (const transport of hostile) {
+    const response = await harness.invoke("wireless:connect", { deviceId: UDID, transport });
+    assert.equal(response.ok, false, `expected refusal for ${JSON.stringify(transport)}`);
+    assert.equal(response.error.code, "INVALID_PARAMS");
+  }
+  assert.equal(harness.calls.length, 0, "a rejected transport must never reach the bridge");
+
+  for (const transport of ["usb", "wifi-mux", "rsd-lan"]) {
+    const response = await harness.invoke("wireless:connect", { deviceId: UDID, transport });
+    assert.equal(response.ok, true);
+    assert.deepEqual(harness.calls.at(-1), { method: "wireless.connect", params: { deviceId: UDID, transport } });
+  }
+});
+
+test("wireless:probe accepts a device filter and nothing else", async () => {
+  const harness = makeHarness();
+  await harness.invoke("wireless:probe", {});
+  assert.deepEqual(harness.calls.at(-1), { method: "wireless.probe", params: {} });
+
+  await harness.invoke("wireless:probe", { deviceId: UDID });
+  assert.deepEqual(harness.calls.at(-1), { method: "wireless.probe", params: { deviceId: UDID } });
+
+  const before = harness.calls.length;
+  await harness.invoke("wireless:probe", { deviceId: null, probeIdentity: false });
+  assert.deepEqual(harness.calls.at(-1), { method: "wireless.probe", params: { probeIdentity: false } });
+  assert.equal(harness.calls.length, before + 1);
+
+  assert.equal((await harness.invoke("wireless:probe", { deviceId: "$(whoami)" })).ok, false);
+  assert.equal((await harness.invoke("wireless:probe", { probeIdentity: "true" })).ok, false);
+  assert.equal(harness.calls.length, before + 1, "a rejected probe request must not reach the bridge");
+});
+
+test("wireless:status and disconnect never carry a host or a port", async () => {
+  const harness = makeHarness();
+  await harness.invoke("wireless:status", {});
+  assert.deepEqual(harness.calls.at(-1), { method: "wireless.status", params: {} });
+
+  await harness.invoke("wireless:disconnect", { deviceId: UDID });
+  assert.deepEqual(harness.calls.at(-1), { method: "wireless.disconnect", params: { deviceId: UDID } });
+
+  await harness.invoke("wireless:disconnect", { deviceId: UDID, host: "10.0.0.1", port: 27015 });
+  assert.deepEqual(harness.calls.at(-1).params, { deviceId: UDID }, "extra keys are dropped, not forwarded");
+
+  assert.equal((await harness.invoke("wireless:disconnect", { deviceId: "not a udid" })).ok, false);
+});
+
+test("readiness and capabilities can name a transport but never an address", async () => {
+  const harness = makeHarness();
+  await harness.invoke("devices:readiness", { deviceId: UDID, transport: "wifi-mux" });
+  assert.deepEqual(harness.calls.at(-1).params, { deviceId: UDID, transport: "wifi-mux" });
+
+  assert.equal((await harness.invoke("devices:readiness", { deviceId: UDID, transport: "10.0.0.1" })).ok, false);
+  assert.equal((await harness.invoke("devices:capabilities", { deviceId: UDID, transport: 7 })).ok, false);
+
+  await harness.invoke("devices:capabilities", { deviceId: UDID, deep: true });
+  assert.deepEqual(harness.calls.at(-1).params, { deviceId: UDID, deep: true });
 });
 
 test("simulation:start rejects out-of-range and non-numeric coordinates", async () => {

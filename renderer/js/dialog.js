@@ -55,8 +55,11 @@ document.addEventListener("DOMContentLoaded", () => {
  */
 export function promptText({ title, label, value = "", hint = "", confirmLabel = "Save", placeholder = "" }) {
   return new Promise((resolve) => {
-    activeResolve = resolve;
+    // `open()` settles whatever dialog it replaces, so the new resolver must not be
+    // installed until that has happened — otherwise opening a dialog resolves its own
+    // promise with `null` before the user can answer it.
     const body = open({ title });
+    activeResolve = resolve;
 
     const input = el("input", { attrs: { type: "text", value, placeholder, maxlength: "120" } });
     const error = el("div", { className: "hint bad", attrs: { hidden: "hidden" } });
@@ -104,8 +107,11 @@ export function promptText({ title, label, value = "", hint = "", confirmLabel =
  */
 export function confirmAction({ title, message, confirmLabel = "Confirm", danger = false, hint = "" }) {
   return new Promise((resolve) => {
-    activeResolve = (value) => resolve(Boolean(value));
+    // `open()` settles whatever dialog it replaces, so the new resolver must not be
+    // installed until that has happened — otherwise opening a dialog resolves its own
+    // promise with `false` and a confirmation can never be accepted.
     const body = open({ title });
+    activeResolve = (value) => resolve(Boolean(value));
 
     body.appendChild(el("p", { text: message, attrs: { style: "margin:0 0 6px; font-size:12.5px; line-height:1.7;" } }));
     if (hint) body.appendChild(el("div", { className: "hint", text: hint }));
@@ -126,8 +132,8 @@ export function confirmAction({ title, message, confirmLabel = "Confirm", danger
 /** Read-only dialog used for help text and setup instructions. */
 export function showInfo({ title, children = [] }) {
   return new Promise((resolve) => {
-    activeResolve = () => resolve(undefined);
     const body = open({ title });
+    activeResolve = () => resolve(undefined);
     for (const child of children) body.appendChild(child);
     body.appendChild(
       el("div", { className: "btn-row end", attrs: { style: "margin-top:14px;" } }, [

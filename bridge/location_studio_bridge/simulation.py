@@ -9,6 +9,11 @@ Transport selection
   fire-and-forget, so results for this path are reported with
   ``acknowledged: false`` and are never labelled as hardware-confirmed.
 
+The caller may pin which *medium* a session runs over (USB cable, Wi-Fi mux entry,
+direct LAN RemoteServiceDiscovery). Whatever the device answers with is then reported
+in the session snapshot, because "the GPS was moved" and "the GPS was moved over
+Wi-Fi" are different claims.
+
 What this module will not do
 ----------------------------
 * It never reports an active override that it did not observe.
@@ -90,8 +95,8 @@ class DvtLocationTarget:
                 "The DVT developer service refused the connection.",
                 f"{type(exc).__name__}: {exc}",
                 remedy=(
-                    "Confirm Developer Mode is enabled on the iPhone, then reconnect the cable. "
-                    "If this persists, restart the phone."
+                    "Confirm Developer Mode is enabled on the iPhone, then reconnect it on the transport "
+                    "this session uses. If this persists, restart the phone."
                 ),
                 retryable=True,
             ) from exc
@@ -143,16 +148,19 @@ class LegacyLocationTarget:
     acknowledged = False
     kind = "lockdown-dt-simulatelocation"
 
-    def __init__(self, lockdown: Any) -> None:
-        self._lockdown = lockdown
+    def __init__(self, device_id: str, connection_type: Optional[str] = None) -> None:
+        self._device_id = device_id
+        self._connection_type = connection_type
         self._client: Any = None
 
     async def open(self) -> None:
         from pymobiledevice3.lockdown import create_using_usbmux
 
-        device_id = self._lockdown
         self._client = await asyncio.wait_for(
-            create_using_usbmux(serial=device_id, autopair=False), timeout=LOCKDOWN_TIMEOUT_S
+            create_using_usbmux(
+                serial=self._device_id, autopair=False, connection_type=self._connection_type
+            ),
+            timeout=LOCKDOWN_TIMEOUT_S,
         )
         from pymobiledevice3.services.simulate_location import DtSimulateLocation
 
@@ -204,6 +212,7 @@ class SimulationSession:
         target: Any,
         emit: Any,
         identity: dict[str, Any],
+        link: Optional[dict[str, Any]] = None,
     ) -> None:
         self.id = uuid.uuid4().hex[:12]
         self.device_id = device_id
@@ -213,6 +222,9 @@ class SimulationSession:
         self.state = SimulationState.PREPARING
         self.target = target
         self.identity = identity
+        # Which medium the developer session was actually opened over. ``transport`` says
+        # DVT or legacy; this says cable, Wi-Fi mux entry, or a direct LAN endpoint.
+        self.link = dict(link or {})
         self.started_at = time.time()
         self.finished_at: Optional[float] = None
         self.error: Optional[dict[str, Any]] = None
@@ -243,7 +255,8 @@ class SimulationSession:
         try:
             self.state = SimulationState.ACTIVE
             await self._emit_state("simulation started", extra={"deviceAcknowledged": self.target.acknowledged})
-            self._watchdog = asyncio.create_task(self._device_watchdog(), name=f"watchdog-{self.id}")
+            if self.link.get("transport") != "rsd-lan":
+                self._watchdog = asyncio.create_task(self._device_watchdog(), name=f"watchdog-{self.id}")
             if self.mode == "route":
                 self._task = asyncio.create_task(self._play_route(), name=f"route-{self.id}")
             else:
@@ -332,7 +345,14 @@ class SimulationSession:
             )
 
     async def _device_watchdog(self) -> None:
-        """Detect a USB removal independently of the developer channel."""
+        """Detect a removal independently of the developer channel.
+
+        Only the mux-backed transports are watched this way: a device reached through a
+        direct LAN endpoint is *never* in usbmuxd's list, so absence there would be
+        reported as a disconnection that did not happen. Such sessions prove liveness by
+        writing - a fixed location is re-published and a route publishes constantly, and
+        either one fails the session when the device stops answering.
+        """
         from pymobiledevice3 import usbmux
 
         while not self._stop_requested:
@@ -359,7 +379,6 @@ class SimulationSession:
             if self.state == SimulationState.ACTIVE and self.mode == "route":
                 # Cheap liveness: the route task republishes constantly, so a stalled
                 # channel surfaces through target.set() timeouts instead.
-
                 pass
 
     async def pause(self) -> None:
@@ -419,7 +438,7 @@ class SimulationSession:
                 "Could not confirm that the location override was removed.",
                 f"{type(exc).__name__}: {exc}",
                 remedy=(
-                    "Unplug and replug the iPhone, or restart it, to guarantee the device is back on its own GPS."
+                    "Reconnect the iPhone, or restart it, to guarantee the device is back on its own GPS."
                 ),
             )
             logger.warning("clear() failed during stop: %s", exc)
@@ -488,6 +507,7 @@ class SimulationSession:
             "mode": self.mode,
             "state": self.state,
             "transport": self.target.kind,
+            "link": self.link,
             "deviceAcknowledged": self.target.acknowledged,
             "waypointCount": self.route_points,
             "publishedPointCount": self.published_count,
@@ -524,6 +544,11 @@ class SimulationService:
 
     # -------------------------------------------------------------- helpers
 
+    @property
+    def current_session(self) -> Optional[SimulationSession]:
+        """The last session, ended or not. Callers check ``state`` themselves."""
+        return self._session
+
     def _active_session(self) -> SimulationSession:
         session = self._session
         if session is None or session.state in {
@@ -534,18 +559,19 @@ class SimulationService:
             raise BridgeError(
                 ErrorCode.NO_ACTIVE_SIMULATION,
                 "No location simulation is running.",
-                remedy="Start a simulation from the Simulation Console first.",
+                remedy="Start a simulation from the Location workspace first.",
             )
         return session
 
-    async def _read_identity(self, device_id: str) -> dict[str, Any]:
+    async def _read_identity(self, device_id: str, connection_type: Optional[str] = None) -> dict[str, Any]:
         from .device_manager import DeviceManager
 
         from pymobiledevice3.lockdown import create_using_usbmux
 
         try:
             client = await asyncio.wait_for(
-                create_using_usbmux(serial=device_id, autopair=False), timeout=LOCKDOWN_TIMEOUT_S
+                create_using_usbmux(serial=device_id, autopair=False, connection_type=connection_type),
+                timeout=LOCKDOWN_TIMEOUT_S,
             )
         except Exception as exc:  # noqa: BLE001
             error = DeviceManager._classify_lockdown_error(exc)
@@ -554,7 +580,7 @@ class SimulationService:
                     ErrorCode.NOT_PAIRED,
                     "The iPhone is not paired with this PC.",
                     f"{type(exc).__name__}: {exc}",
-                    remedy="Unlock the iPhone and pair it from Device Center, then retry.",
+                    remedy="Unlock the iPhone and pair it from the Device workspace, then retry.",
                 ) from exc
             raise error from exc
         try:
@@ -575,7 +601,7 @@ class SimulationService:
             except Exception:  # noqa: BLE001
                 logger.debug("error closing lockdown client", exc_info=True)
 
-    async def _build_target(self, device_id: str, identity: dict[str, Any]) -> Any:
+    async def _build_target(self, device_id: str, identity: dict[str, Any], endpoint: Any = None) -> Any:
         product_version = identity.get("productVersion")
         if requires_tunnel(product_version):
             if identity.get("developerModeEnabled") is False:
@@ -585,18 +611,39 @@ class SimulationService:
                     f"iOS {product_version} requires Developer Mode for developer services.",
                     remedy="Settings → Privacy & Security → Developer Mode → on, then restart the iPhone.",
                 )
-            rsd = await self._tunnels.acquire(device_id)
+            # ``endpoint`` is the transport the caller proved for this device. Passing it
+            # through is what keeps a wireless session from quietly running over a cable.
+            rsd = await self._tunnels.acquire(device_id, endpoint=endpoint)
             identity["tunnel"] = self._tunnels.status()
             target = DvtLocationTarget(rsd)
         else:
             identity["tunnel"] = None
-            target = LegacyLocationTarget(device_id)
+            target = LegacyLocationTarget(device_id, getattr(endpoint, "connection_type", None))
         await target.open()
         return target
 
+    @staticmethod
+    def _link_for(endpoint: Any, identity: dict[str, Any]) -> dict[str, Any]:
+        """Describe the medium a session was really built on, from what was observed."""
+        requested = getattr(endpoint, "transport", None)
+        tunnel = identity.get("tunnel") or {}
+        wireless = bool(tunnel.get("wireless")) if tunnel.get("open") else bool(
+            getattr(endpoint, "is_wireless", False)
+        )
+        return {
+            "requested": requested,
+            # The transport the developer session was actually established on. When the
+            # tunnel answered, that is what it reported; otherwise nothing is claimed.
+            "transport": tunnel.get("transport") or requested,
+            "active": tunnel.get("transport") or requested,
+            "wireless": wireless,
+            "kind": tunnel.get("kind"),
+            "address": getattr(endpoint, "host", None),
+        }
+
     # ------------------------------------------------------------------ API
 
-    async def start_fixed(self, device_id: str, coordinate: Any) -> dict[str, Any]:
+    async def start_fixed(self, device_id: str, coordinate: Any, endpoint: Any = None) -> dict[str, Any]:
         udid = validate_udid(device_id)
         point = validate_coordinate(coordinate, "coordinate")
         return await self._start(udid, "fixed", [point], {
@@ -604,16 +651,21 @@ class SimulationService:
             "interpolate": False,
             "updateRateHz": 0.0,
             "loop": False,
-        })
+        }, endpoint=endpoint)
 
-    async def start_route(self, device_id: str, points: Any, options: Any) -> dict[str, Any]:
+    async def start_route(self, device_id: str, points: Any, options: Any, endpoint: Any = None) -> dict[str, Any]:
         udid = validate_udid(device_id)
         validated_points = validate_points(points, name="points", minimum=2)
         validated_options = validate_route_options(options)
-        return await self._start(udid, "route", validated_points, validated_options)
+        return await self._start(udid, "route", validated_points, validated_options, endpoint=endpoint)
 
     async def _start(
-        self, device_id: str, mode: str, points: list[dict[str, float]], options: dict[str, Any]
+        self,
+        device_id: str,
+        mode: str,
+        points: list[dict[str, float]],
+        options: dict[str, Any],
+        endpoint: Any = None,
     ) -> dict[str, Any]:
         async with self._lock:
             existing = self._session
@@ -630,8 +682,8 @@ class SimulationService:
                     remedy="Stop the running session before starting another one.",
                 )
 
-            identity = await self._read_identity(device_id)
-            target = await self._build_target(device_id, identity)
+            identity = await self._read_identity(device_id, getattr(endpoint, "connection_type", None))
+            target = await self._build_target(device_id, identity, endpoint=endpoint)
 
             session = SimulationSession(
                 device_id=device_id,
@@ -641,6 +693,7 @@ class SimulationService:
                 target=target,
                 emit=self._on_session_event,
                 identity=identity,
+                link=self._link_for(endpoint, identity),
             )
             self._session = session
 
@@ -702,16 +755,16 @@ class SimulationService:
             "history": self._history[-10:],
         }
 
-    async def screenshot(self, device_id: str) -> dict[str, Any]:
+    async def screenshot(self, device_id: str, endpoint: Any = None) -> dict[str, Any]:
         """Capture the device screen. Used to verify a simulation on the phone itself."""
         udid = validate_udid(device_id)
-        identity = await self._read_identity(udid)
+        identity = await self._read_identity(udid, getattr(endpoint, "connection_type", None))
         if not requires_tunnel(identity.get("productVersion")):
             raise UnsupportedOperation(
                 "Device screenshots require the DVT transport used on iOS 17 and newer.",
                 f"Reported iOS version: {identity.get('productVersion')}.",
             )
-        rsd = await self._tunnels.acquire(udid)
+        rsd = await self._tunnels.acquire(udid, endpoint=endpoint)
         from pymobiledevice3.services.dvt.instruments.dvt_provider import DvtProvider
         from pymobiledevice3.services.dvt.instruments.screenshot import Screenshot
 

@@ -28,7 +28,7 @@ from .protocol import (
     failure,
     success,
 )
-from .simulation import SimulationService
+from .simulation import SimulationService, SimulationState
 from .tunnel import TunnelManager
 from .validation import (
     require_bool,
@@ -37,6 +37,7 @@ from .validation import (
     require_string,
     validate_points,
     validate_route_options,
+    validate_transport,
     validate_udid,
 )
 
@@ -64,6 +65,10 @@ class BridgeServer:
             "devices.capabilities": self._capabilities,
             "devices.readiness": self._readiness,
             "devices.pair": self._pair,
+            "wireless.probe": self._wireless_probe,
+            "wireless.connect": self._wireless_connect,
+            "wireless.disconnect": self._wireless_disconnect,
+            "wireless.status": self._wireless_status,
             "simulation.start": self._simulation_start,
             "simulation.startRoute": self._simulation_start_route,
             "simulation.pause": self._simulation_pause,
@@ -179,8 +184,8 @@ class BridgeServer:
         return {"ok": True, "message": "Simulation stopped and tunnel closed.", "tunnel": self.tunnels.status()}
 
     async def _disconnect(self, _params: dict[str, Any]) -> dict[str, Any]:
-        await self.tunnels.release()
-        return {"ok": True, "tunnel": self.tunnels.status()}
+        """Close the developer session and forget which transport was selected for it."""
+        return await self.devices.disconnect_transport()
 
     async def _discover(self, params: dict[str, Any]) -> dict[str, Any]:
         probe_identity = True
@@ -195,15 +200,21 @@ class BridgeServer:
         deep = False
         if "deep" in params:
             deep = require_bool(params["deep"], "deep")
-        return await self.devices.get_capabilities(device_id, deep=deep)
+        transport = None
+        if "transport" in params:
+            transport = validate_transport(params["transport"])
+        return await self.devices.get_capabilities(device_id, deep=deep, transport=transport)
 
     async def _readiness(self, params: dict[str, Any]) -> dict[str, Any]:
         device_id = validate_udid(params.get("deviceId"))
         open_tunnel = True
         if "openTunnel" in params:
             open_tunnel = require_bool(params["openTunnel"], "openTunnel")
+        transport = None
+        if "transport" in params:
+            transport = validate_transport(params["transport"])
         async with self._device_lock:
-            return await self.devices.check_readiness(device_id, open_tunnel=open_tunnel)
+            return await self.devices.check_readiness(device_id, open_tunnel=open_tunnel, transport=transport)
 
     async def _pair(self, params: dict[str, Any]) -> dict[str, Any]:
         """Explicitly start pairing. Only ever reached from a user action in the UI."""
@@ -267,12 +278,85 @@ class BridgeServer:
         await self._emit("device.pairing.completed", {"deviceId": device_id, "identity": identity})
         return {"deviceId": device_id, "paired": True, "identity": identity}
 
+    # ---------------------------------------------------------------- wireless
+
+    async def _wireless_probe(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Report every transport this PC can actually reach an iPhone on.
+
+        ``deviceId`` narrows the identity proof to one device; ``probeIdentity=false``
+        keeps it to discovery only (no lockdown handshakes).
+        """
+        device_id = params.get("deviceId")
+        if device_id is not None:
+            device_id = validate_udid(device_id)
+        prove_identity = True
+        if "probeIdentity" in params:
+            prove_identity = require_bool(params["probeIdentity"], "probeIdentity")
+        async with self._device_lock:
+            return await self.devices.probe_wireless(device_id=device_id, prove_identity=prove_identity)
+
+    async def _wireless_connect(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Prove one transport and open the developer session over it.
+
+        The renderer names a transport from a fixed allowlist; it never supplies a host,
+        a port or a command, and the addresses used are the ones the bridge just observed.
+        """
+        device_id = validate_udid(params.get("deviceId"))
+        transport = validate_transport(params.get("transport"))
+        async with self._device_lock:
+            report = await self.devices.connect_transport(device_id, transport)
+        await self._emit("wireless.state", report)
+        return report
+
+    async def _wireless_disconnect(self, params: dict[str, Any]) -> dict[str, Any]:
+        device_id = params.get("deviceId")
+        if device_id is not None:
+            device_id = validate_udid(device_id)
+        session = self.simulation.current_session
+        if session is not None and session.state in {
+            SimulationState.PREPARING,
+            SimulationState.ACTIVE,
+            SimulationState.PAUSED,
+            SimulationState.COMPLETED,
+        }:
+            raise BridgeError(
+                ErrorCode.SIMULATION_ACTIVE,
+                "A location simulation is still running on this iPhone.",
+                f"Session {session.id} is {session.state}.",
+                remedy="Press Stop first: stopping restores the iPhone to its real GPS before the link closes.",
+            )
+        async with self._device_lock:
+            return await self.devices.disconnect_transport(device_id)
+
+    async def _wireless_status(self, params: dict[str, Any]) -> dict[str, Any]:
+        """The last probe's summary plus the live tunnel state - no new device traffic."""
+        device_id = params.get("deviceId")
+        if device_id is not None:
+            device_id = validate_udid(device_id)
+        probe = self.devices.wireless.last_probe
+        return {
+            "tunnel": self.tunnels.status(),
+            "link": self.devices.endpoint_summary(device_id) if device_id else None,
+            "lastProbe": {
+                "probedAt": probe.get("probedAt"),
+                "durationMs": probe.get("durationMs"),
+                "transports": probe.get("transports", {}),
+                "candidates": probe.get("candidates", []),
+                "host": probe.get("host"),
+                "issues": probe.get("issues", []),
+                "verdict": probe.get("verdict"),
+            }
+            if probe.get("probedAt")
+            else None,
+        }
+
     async def _simulation_start(self, params: dict[str, Any]) -> dict[str, Any]:
         device_id = validate_udid(params.get("deviceId"))
         if "coordinate" not in params:
             raise ValidationError("'coordinate' is required.")
+        endpoint = self.devices.selected_endpoint(device_id)
         async with self._device_lock:
-            result = await self.simulation.start_fixed(device_id, params["coordinate"])
+            result = await self.simulation.start_fixed(device_id, params["coordinate"], endpoint=endpoint)
             # The device accepted a simulated coordinate: that is the strongest
             # evidence there is for "this device can be simulated", so the device
             # card is allowed to say so from now on.
@@ -283,8 +367,9 @@ class BridgeServer:
         device_id = validate_udid(params.get("deviceId"))
         if "points" not in params:
             raise ValidationError("'points' is required for a route simulation.")
+        endpoint = self.devices.selected_endpoint(device_id)
         async with self._device_lock:
-            result = await self.simulation.start_route(device_id, params["points"], params.get("options"))
+            result = await self.simulation.start_route(device_id, params["points"], params.get("options"), endpoint=endpoint)
             self.devices.record_stages(device_id, simulationReady=True)
             return result
 
@@ -306,7 +391,8 @@ class BridgeServer:
 
     async def _simulation_screenshot(self, params: dict[str, Any]) -> dict[str, Any]:
         device_id = validate_udid(params.get("deviceId"))
-        return await self.simulation.screenshot(device_id)
+        endpoint = self.devices.selected_endpoint(device_id)
+        return await self.simulation.screenshot(device_id, endpoint=endpoint)
 
     async def _route_analyze(self, params: dict[str, Any]) -> dict[str, Any]:
         points = validate_points(params.get("points"), name="points", minimum=1)

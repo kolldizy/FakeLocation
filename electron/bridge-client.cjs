@@ -23,6 +23,12 @@ const REQUEST_TIMEOUTS = {
   "devices.capabilities": 120_000,
   "devices.readiness": 150_000,
   "devices.pair": 200_000,
+  // A probe is three multicast browses plus one lockdown handshake per candidate.
+  "wireless.probe": 90_000,
+  // Connecting can open a userspace tunnel, which itself allows 75 s.
+  "wireless.connect": 180_000,
+  "wireless.disconnect": 40_000,
+  "wireless.status": 15_000,
   "simulation.start": 150_000,
   "simulation.startRoute": 150_000,
   "simulation.pause": 20_000,
@@ -363,7 +369,7 @@ class BridgeClient extends EventEmitter {
     }
     if (!this.child || !this.child.stdin.writable) {
       return Promise.reject(
-        new BridgeStartError("The device bridge is not running.", "Press Restart bridge in Device Center to try again.")
+        new BridgeStartError("The device bridge is not running.", "Press Restart bridge in the Device workspace to try again.")
       );
     }
     const id = this.nextId++;

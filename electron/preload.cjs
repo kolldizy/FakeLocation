@@ -37,6 +37,12 @@ contextBridge.exposeInMainWorld("locationStudio", {
   checkReadiness: invoke("devices:readiness"),
   pairDevice: invoke("devices:pair"),
 
+  // Wireless link
+  probeWireless: invoke("wireless:probe"),
+  connectWireless: invoke("wireless:connect"),
+  disconnectWireless: invoke("wireless:disconnect"),
+  getWirelessStatus: invoke("wireless:status"),
+
   // Simulation
   startSimulation: invoke("simulation:start"),
   startRouteSimulation: invoke("simulation:startRoute"),
